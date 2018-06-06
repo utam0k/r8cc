@@ -1,33 +1,131 @@
 use std::io;
-use std::str::Chars;
+use std::iter::FromIterator;
 
-fn compile_number(mut n: u32, chars: Chars) {
-    for c in chars.skip(1) {
-        if c.is_whitespace() {
-            break;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Stream {
+    data: Vec<char>,
+    pos: usize,
+}
+
+impl FromIterator<char> for Stream {
+    fn from_iter<T: IntoIterator<Item = char>>(t: T) -> Self {
+        Self {
+            data: t.into_iter().collect(),
+            pos: 0,
         }
-        if !c.is_ascii_digit() {
-            eprintln!("Invalid character in number: '{}'", c)
-        }
-        n = n * 10 + c.to_digit(10).unwrap();
     }
+}
+
+impl From<String> for Stream {
+    fn from(s: String) -> Self {
+        Self::from_iter(s.chars())
+    }
+}
+
+impl Iterator for Stream {
+    type Item = char;
+
+    fn next(&mut self) -> Option<char> {
+        if self.pos >= self.data.len() {
+            return None;
+        }
+        self.pos += 1;
+        Some(self.data[self.pos - 1])
+    }
+}
+
+impl Stream {
+    pub fn prev(&self) -> Self {
+        self.jump(self.pos - 1)
+    }
+
+    pub fn jump(&self, pos: usize) -> Self {
+        Self {
+            data: self.data.clone(),
+            pos: pos,
+        }
+    }
+
+    pub fn skip_space(&mut self) {
+        for c in self.data[self.pos..].iter() {
+            self.pos += 1;
+            if c.is_whitespace() {
+                continue;
+            }
+            self.pos -= 1;
+            return;
+        }
+    }
+}
+
+
+fn read_number(mut n: u32, mut stream: Stream) -> (u32, Stream) {
+    loop {
+        if let Some(c) = stream.next() {
+            if c.is_whitespace() {
+                break;
+            } else if !c.is_ascii_digit() {
+                return (n, stream.prev());
+            }
+            n = n * 10 + c.to_digit(10).unwrap();
+        } else {
+            return (n, stream);
+        }
+    }
+
+    return (n, stream);
+}
+
+fn compile_expr2(mut stream: Stream) {
+    let mut op: &str;
+    stream.skip_space();
+    loop {
+        match stream.next() {
+            Some(c) => {
+                op = match c {
+                    '+' => "add",
+                    '-' => "sub", 
+                    _ => {
+                        panic!("Operator expected, but got {:?}", c);
+                    }
+                }
+            }
+            None => break,
+        }
+        stream.skip_space();
+        let c = stream.next().unwrap();
+        if !c.is_ascii_digit() {
+            eprintln!("Number expected, but got {:?}", c);
+        }
+        println!(
+            "\t{} ${}, %rax",
+            op,
+            read_number(c.to_digit(10).unwrap(), stream.clone()).0
+        );
+    }
+
+    println!("\tret")
+}
+
+fn compile_expr(n: u32, stream: Stream) {
+    let (n, stream) = read_number(n, stream);
     println!(
         "\t.text
          \t.global intfn
          intfn:
-         \tmov ${}, %rax
-         \tret\n",
+         \tmov ${}, %rax",
         n
     );
+    compile_expr2(stream);
 }
 
-fn compile_string(chars: Chars) {
+fn compile_string(stream: Stream) {
     let mut res = String::new();
-    if chars.clone().last() != Some('"') {
+    if stream.clone().last() != Some('"') {
         panic!("Unterminated string")
     }
 
-    for c in chars.skip(1) {
+    for c in stream {
         if c == '"' {
             break;
         }
@@ -53,14 +151,16 @@ fn compile() -> io::Result<()> {
     // remove `\n`
     input.pop();
 
-    let c = input.chars().next().unwrap();
+    let mut stream = Stream::from(input.clone());
+
+
+    let c = stream.next().unwrap();
 
     if c.is_ascii_digit() {
         let n = c.to_digit(10).unwrap();
-        compile_number(n, input.chars());
-    }
-    if c == '"' {
-        compile_string(input.chars());
+        compile_expr(n, stream);
+    } else if c == '"' {
+        compile_string(stream);
     }
 
     Ok(())

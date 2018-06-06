@@ -36,8 +36,13 @@ function testfail {
 test 0 0
 test abc '"abc"'
 
+test 3 '1+2'
+test 3 '1 + 2'
+test 10 '1+2+3+4'
+
 testfail '"abc'
 testfail '0abc'
+testfail '1+'
 
 rm -f tmp.out tmp.s
-echo "All tests passed"ke
+echo "All tests passed"
