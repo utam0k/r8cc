@@ -45,6 +45,10 @@ impl Stream {
         }
     }
 
+    pub fn end(&self) -> Option<&char> {
+        self.data.last()
+    }
+
     pub fn skip_space(&mut self) {
         for c in self.data[self.pos..].iter() {
             self.pos += 1;

@@ -1,112 +1,86 @@
 use stream::Stream;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub enum AstKind {
-    AstOpPlus,
-    AstOpMinus,
-    AstInt,
-    AstStr,
+    AstOpPlus(Box<Ast>, Box<Ast>),
+    AstOpMinus(Box<Ast>, Box<Ast>),
+    AstInt(u32),
+    AstStr(String),
 }
 
 #[derive(Clone, Debug)]
 pub struct Ast {
     pub kind: AstKind,
-    ival: Option<u32>,
-    sval: Option<String>,
-    left: Option<Box<Ast>>,
-    right: Option<Box<Ast>>,
 }
 
 impl Ast {
-    pub fn make_ast_op(kind: AstKind, left: Box<Ast>, right: Box<Ast>) -> Self {
-        Self {
-            kind: kind,
-            ival: None,
-            sval: None,
-            left: Some(left),
-            right: Some(right),
-        }
+    fn new(kind: AstKind) -> Self {
+        Self { kind: kind }
     }
 
-    pub fn make_ast_int(val: u32) -> Self {
-        Self {
-            kind: AstKind::AstInt,
-            ival: Some(val),
-            sval: None,
-            left: None,
-            right: None,
-        }
+    pub fn read_expr(stream: Stream) -> (Ast, Stream) {
+        let (stream, left) = Self::read_prim(stream);
+        return Self::read_expr2(left, stream);
     }
 
-    pub fn make_ast_str(val: String) -> Self {
-        Self {
-            kind: AstKind::AstStr,
-            ival: None,
-            sval: Some(val),
-            left: None,
-            right: None,
-        }
-    }
-
-    pub fn read_number(mut n: u32, mut stream: Stream) -> (Ast, Stream) {
+    fn read_number(mut n: u32, mut stream: Stream) -> (Ast, Stream) {
         loop {
             if let Some(c) = stream.next() {
                 if c.is_whitespace() {
                     break;
                 } else if !c.is_ascii_digit() {
-                    return (Self::make_ast_int(n), stream.prev());
+                    return (Self::new(AstKind::AstInt(n)), stream.prev());
                 }
                 n = n * 10 + c.to_digit(10).unwrap();
             } else {
-                return (Self::make_ast_int(n), stream);
+                return (Self::new(AstKind::AstInt(n)), stream);
             }
         }
 
-        return (Self::make_ast_int(n), stream);
+        return (Self::new(AstKind::AstInt(n)), stream);
     }
 
-    pub fn read_string(stream: Stream) -> (Ast, Stream) {
+    fn read_string(mut stream: Stream) -> (Ast, Stream) {
         let mut res = String::new();
-        if stream.clone().last() != Some('"') {
+        if stream.end() != Some(&'"') {
             panic!("Unterminated string")
         }
 
-        let mut n = 1;
-        for c in stream.clone() {
-            n += 1;
-            if c == '"' {
+        loop {
+            if let Some(c) = stream.next() {
+                if c == '"' {
+                    break;
+                }
+                res.push(c);
+            } else {
                 break;
             }
-            res.push(c);
         }
 
-        return (Self::make_ast_str(res), stream.jump(n));
+        return (Self::new(AstKind::AstStr(res)), stream);
     }
 
-    pub fn read_expr2(mut stream: Stream, left: Self) -> (Ast, Stream) {
+    fn read_expr2(mut stream: Stream, left: Self) -> (Ast, Stream) {
         let op: AstKind;
         stream.skip_space();
         match stream.next() {
             Some(c) => {
+                stream.skip_space();
+                let (right, stream) = Self::read_prim(stream);
                 op = match c {
-                    '+' => AstKind::AstOpPlus,
-                    '-' => AstKind::AstOpMinus,
+                    '+' => AstKind::AstOpPlus(Box::new(left), Box::new(right)),
+                    '-' => AstKind::AstOpMinus(Box::new(left), Box::new(right)),
                     _ => {
                         panic!("Operator expected, but got {:?}", c);
                     }
                 };
-                stream.skip_space();
-                let (right, stream) = Self::read_prim(stream);
-                return Self::read_expr2(
-                    stream,
-                    Self::make_ast_op(op, Box::new(left), Box::new(right)),
-                );
+                return Self::read_expr2(stream, Self::new(op));
             }
             None => return (left, stream),
         }
     }
 
-    pub fn read_prim(mut stream: Stream) -> (Ast, Stream) {
+    fn read_prim(mut stream: Stream) -> (Ast, Stream) {
         let c = stream.next().unwrap();
         if c.is_ascii_digit() {
             let n = c.to_digit(10).unwrap();
@@ -116,14 +90,9 @@ impl Ast {
         }
         panic!("Don't know how to handle {:?}", c)
     }
-
-    pub fn read_expr(stream: Stream) -> (Ast, Stream) {
-        let (stream, left) = Self::read_prim(stream);
-        return Self::read_expr2(left, stream);
-    }
 }
 
-pub fn print_quote(q: String) {
+fn print_quote(q: String) {
     for c in q.chars() {
         if c == '"' || c == '\\' {
             print!("\\");
@@ -132,69 +101,69 @@ pub fn print_quote(q: String) {
     }
 }
 
-pub fn emit_string(ast: Box<Ast>) {
-    print!(
-        "\t.data
-        .mydata:
-        \t.string \""
-    );
-    print_quote(ast.sval.unwrap());
-    println!(
-        "\"\n\t.text
-        \t.global stringfn
-        stringfn:
-        \tlea .mydata(%rip), %rax
-        \tret",
-    );
+pub fn emit_string(val: String) {
+    print!("\t.data\n");
+    print!(".mydata:\n\t");
+    print!(".string \"");
+    print_quote(val);
+    print!("\"\n\t");
+    print!(".text\n\t");
+    print!(".global stringfn\n");
+    print!("stringfn:\n\t");
+    print!("lea .mydata(%rip), %rax\n\t");
+    print!("ret\n");
 }
 
-pub fn ensure_intexpr(ast: Box<Ast>) {
-    use self::AstKind::*;
-    if ast.kind != AstOpPlus && ast.kind != AstOpMinus && ast.kind != AstInt {
-        panic!("integer or binary operator expected");
+pub fn emit_intexpr(ast: &Box<Ast>) {
+    match ast.kind {
+        AstKind::AstInt(val) => print!("mov ${}, %eax\n\t", val),
+        AstKind::AstOpPlus(_, _) |
+        AstKind::AstOpMinus(_, _) => emit_binop(&ast),
+        _ => panic!("integer or binary operator expected"),
     }
 }
 
-pub fn emit_intexpr(ast: Box<Ast>) {
-    ensure_intexpr(ast.clone());
-    if ast.clone().kind == AstKind::AstInt {
-        println!("\tmov ${}, %eax", ast.ival.unwrap());
-    } else {
-        emit_binop(ast.clone());
-    }
-}
-
-pub fn emit_binop(ast: Box<Ast>) {
+fn emit_binop(ast: &Box<Ast>) {
     let op: &str;
     op = match ast.kind {
-        AstKind::AstOpPlus => "add",
-        AstKind::AstOpMinus => "sub",
+        AstKind::AstOpPlus(_, _) => "add",
+        AstKind::AstOpMinus(_, _) => "sub",
         _ => panic!("invalid operand"),
     };
-    emit_intexpr(ast.clone().left.unwrap());
-    println!("\tmov %eax, %ebx");
-    emit_intexpr(ast.clone().right.unwrap());
-    println!("{} %ebx, %eax", op);
+    match ast.kind {
+        AstKind::AstOpPlus(ref left, ref right) => {
+            emit_intexpr(&left);
+            print!("mov %eax, %ebx\n\t");
+            emit_intexpr(&right);
+        }
+        AstKind::AstOpMinus(ref left, ref right) => {
+            emit_intexpr(&left);
+            print!("mov %eax, %ebx\n\t");
+            emit_intexpr(&right);
+        }
+        _ => panic!("invalid operand"),
+    }
+    print!("{} %ebx, %eax\n\t", op);
 }
 
 pub fn print_ast(ast: &Box<Ast>) {
     use self::AstKind::*;
     match ast.kind {
-        AstOpPlus => {
+        AstOpPlus(ref left, ref right) => {
             print!("(+ ");
-            print_ast(&ast.clone().left.unwrap());
+            print_ast(&left);
             print!(" ");
-            print_ast(&ast.clone().right.unwrap());
+            print_ast(&right);
             print!(")");
         }
-        AstOpMinus => {
+        AstOpMinus(ref left, ref right) => {
             print!("(- ");
-            print_ast(&ast.clone().left.unwrap());
+            print_ast(&left);
             print!(" ");
-            print_ast(&ast.clone().right.unwrap());
+            print_ast(&right);
             print!(")");
         }
-        AstInt => print!("{}", ast.ival.unwrap()),
-        AstStr => print_quote(ast.clone().sval.unwrap()),
+        AstInt(val) => print!("{}", val),
+        AstStr(ref val) => print_quote(val.to_string()),
     }
 }

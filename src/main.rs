@@ -7,16 +7,15 @@ use r8cc::stream::Stream;
 use r8cc::ast;
 
 fn compile(ast: ast::Ast) {
-    if ast.kind == ast::AstKind::AstStr {
-        ast::emit_string(Box::new(ast));
-    } else {
-        println!(
-            "\t.text
-            .global intfn
-            intfn:"
-        );
-        ast::emit_intexpr(Box::new(ast));
-        println!("ret");
+    match ast.kind {
+        ast::AstKind::AstStr(val) => ast::emit_string(val),
+        _ => {
+            print!(".text\n\t");
+            print!(".global intfn\n");
+            print!("intfn:\n\t");
+            ast::emit_intexpr(&Box::new(ast));
+            print!("ret\n");
+        }
     }
 }
 
