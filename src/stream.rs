@@ -34,8 +34,8 @@ impl Iterator for Stream {
 }
 
 impl Stream {
-    pub fn prev(&self) -> Self {
-        self.jump(self.pos - 1)
+    pub fn prev(&mut self) {
+        self.pos -= 1
     }
 
     pub fn jump(&self, pos: usize) -> Self {
