@@ -1,12 +1,14 @@
 use CONTEXT;
-use INPUT;
+use r8cc_io::{getc, ungetc, skip_space};
+
+const REGS: [&str; 6] = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"];
+const MAX_ARGS: usize = 6;
 
 #[derive(Clone, Debug)]
 pub struct Var {
     name: String,
     pos: usize,
 }
-
 
 impl Var {
     pub fn new(name: String) -> Self {
@@ -31,10 +33,28 @@ fn find_var(name: &String) -> Option<Var> {
 }
 
 #[derive(Clone, Debug)]
+pub struct FuncCall {
+    pub fname: String,
+    pub args: Vec<Ast>,
+    pub nargs: usize,
+}
+
+impl FuncCall {
+    pub fn new(fname: String, args: Vec<Ast>) -> Self {
+        Self {
+            fname: fname,
+            nargs: args.len(),
+            args: args,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
     AstInt(u32),
     AstSym(Var),
+    AstFuncCall(FuncCall),
 }
 
 #[derive(Clone, Debug)]
@@ -51,6 +71,25 @@ impl Ast {
         match self.kind {
             AstKind::AstInt(ival) => print!("mov ${}, %eax\n\t", ival),
             AstKind::AstSym(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
+            AstKind::AstFuncCall(ref func_call) => {
+                let args_len = func_call.args.len();
+
+                for i in 1..args_len {
+                    print!("push %{}\n\t", REGS[i]);
+                }
+                for arg in &func_call.args {
+                    arg.emit_expr();
+                    print!("push %rax\n\t");
+                }
+                for i in (0..args_len).rev() {
+                    print!("pop %{}\n\t", REGS[i]);
+                }
+                print!("mov $0, %eax\n\t");
+                print!("call {}\n\t", func_call.fname);
+                for i in (1..args_len).rev() {
+                    print!("pop %{}\n\t", REGS[i]);
+                }
+            }
             _ => self.emit_binop(),
         }
     }
@@ -111,14 +150,24 @@ impl Ast {
             }
             AstInt(val) => print!("{}", val),
             AstSym(ref var) => print!("{}", var.name),
+            AstFuncCall(ref func_call) => {
+                print!("{}(", func_call.fname);
+                for i in 0..func_call.args.len() {
+                    func_call.args[i].print_ast();
+                    if i + 1 < func_call.args.len() {
+                        print!(",");
+                    }
+                }
+                print!(")");
+            }
         }
     }
 }
 
 pub fn read_expr() -> Option<Ast> {
     if let Some(r) = read_expr2(0) {
-        INPUT.lock().unwrap().skip_space();
-        if let Some(c) = INPUT.lock().unwrap().next() {
+        skip_space();
+        if let Some(c) = getc() {
             if c != ';' {
                 panic!("Unterminated expression");
             }
@@ -135,7 +184,7 @@ fn read_expr2(prec: i8) -> Option<Ast> {
     let mut ast: Ast;
     let mut op: AstKind;
 
-    INPUT.lock().unwrap().skip_space();
+    skip_space();
     if let Some(ret_val) = read_prim() {;
         ast = ret_val;
     } else {
@@ -143,17 +192,17 @@ fn read_expr2(prec: i8) -> Option<Ast> {
     }
 
     loop {
-        INPUT.lock().unwrap().skip_space();
-        let next_char = INPUT.lock().unwrap().next();
+        skip_space();
+        let next_char = getc();
         match next_char {
             Some(c) => {
                 let prec2 = priority(c);
                 if prec2 < 0 || prec2 < prec {
-                    INPUT.lock().unwrap().prev();
+                    ungetc();
                     return Some(ast);
                 }
 
-                INPUT.lock().unwrap().skip_space();
+                skip_space();
                 if let Some(right) = read_expr2(prec2 + 1) {
                     op = AstKind::AstOp(c, Box::new(ast.clone()), Box::new(right));
                     ast = Ast::new(op);
@@ -172,13 +221,13 @@ fn read_number(mut n: u32) -> Ast {
     loop {
         let next_char: Option<char>;
         {
-            next_char = INPUT.lock().unwrap().next();
+            next_char = getc();
         }
         if let Some(c) = next_char {
             if c.is_whitespace() {
                 break;
             } else if !c.is_ascii_digit() {
-                INPUT.lock().unwrap().prev();
+                ungetc();
                 return Ast::new(AstKind::AstInt(n));
             }
             n = n * 10 + c.to_digit(10).unwrap();
@@ -190,27 +239,64 @@ fn read_number(mut n: u32) -> Ast {
     Ast::new(AstKind::AstInt(n))
 }
 
-fn read_symbol(c: char) -> Ast {
+fn read_ident(c: char) -> String {
     let mut buf = String::new();
     buf.push(c);
 
     loop {
-        INPUT.lock().unwrap().skip_space();
-        let next_char = INPUT.lock().unwrap().next();
+        skip_space();
+        let next_char = getc();
         if let Some(c) = next_char {
-            if !c.is_alphabetic() {
-                INPUT.lock().unwrap().prev();
+            if !c.is_alphabetic() && !c.is_ascii_digit() {
+                ungetc();
                 break;
             }
             buf.push(c);
         }
     }
+    buf
+}
 
+fn read_func_args(fname: String) -> Ast {
+    let mut args: Vec<Ast> = Vec::new();
+    let mut c: char;
+
+    for i in 0..MAX_ARGS {
+        skip_space();
+        c = getc().unwrap();
+        if c == ')' {
+            break;
+        }
+        ungetc();
+        args.push(read_expr2(0).unwrap());
+        c = getc().unwrap();
+        match c {
+            ')' => break,
+            ',' => skip_space(),
+            _ => panic!("Unexpected character: '{}'", c),
+        };
+        if i == MAX_ARGS {
+            panic!("Too many arguments: {}", fname);
+        }
+    }
+
+    Ast::new(AstKind::AstFuncCall(FuncCall::new(fname, args)))
+}
+
+fn read_ident_or_func(c: char) -> Ast {
+    let name: String = read_ident(c);
+    skip_space();
+    let c2: char = getc().unwrap();
+
+    if c2 == '(' {
+        return read_func_args(name);
+    }
+    ungetc();
     let v: Var;
-    if let Some(v2) = find_var(&buf) {
+    if let Some(v2) = find_var(&name) {
         v = v2.clone();
     } else {
-        v = Var::new(buf.clone());
+        v = Var::new(name);
     };
 
     Ast::new(AstKind::AstSym(v))
@@ -220,14 +306,14 @@ fn read_symbol(c: char) -> Ast {
 fn read_prim() -> Option<Ast> {
     let next_char: Option<char>;
     {
-        next_char = INPUT.lock().unwrap().next();
+        next_char = getc();
     }
     if let Some(c) = next_char {
         if c.is_ascii_digit() {
             let n = c.to_digit(10).unwrap();
             return Some(read_number(n));
         } else if c.is_alphabetic() {
-            return Some(read_symbol(c));
+            return Some(read_ident_or_func(c));
         }
     }
     None
