@@ -50,9 +50,27 @@ impl FuncCall {
 }
 
 #[derive(Clone, Debug)]
+pub struct Str {
+    sval: String,
+    sid: usize,
+}
+
+impl Str {
+    pub fn new(sval: String) -> Self {
+        let ret = Self {
+            sval: sval,
+            sid: CONTEXT.lock().unwrap().get_strings_len() + 1,
+        };
+        CONTEXT.lock().unwrap().push_string(ret.clone());
+        ret
+    }
+}
+
+#[derive(Clone, Debug)]
 pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
     AstInt(u32),
+    AstStr(Str),
     AstSym(Var),
     AstFuncCall(FuncCall),
 }
@@ -71,6 +89,7 @@ impl Ast {
         match self.kind {
             AstKind::AstInt(ival) => print!("mov ${}, %eax\n\t", ival),
             AstKind::AstSym(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
+            AstKind::AstStr(ref ast_str) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
             AstKind::AstFuncCall(ref func_call) => {
                 let args_len = func_call.args.len();
 
@@ -150,6 +169,11 @@ impl Ast {
             }
             AstInt(val) => print!("{}", val),
             AstSym(ref var) => print!("{}", var.name),
+            AstStr(ref ast_str) => {
+                print!("\"");
+                print_quote(&ast_str.sval);
+                print!("\"");
+            }
             AstFuncCall(ref func_call) => {
                 print!("{}(", func_call.fname);
                 for i in 0..func_call.args.len() {
@@ -239,6 +263,32 @@ fn read_number(mut n: u32) -> Ast {
     Ast::new(AstKind::AstInt(n))
 }
 
+fn read_string() -> Ast {
+    let mut buffer = String::new();
+    let mut next_char: Option<char>;
+
+    loop {
+        next_char = getc();
+        if let Some(c) = next_char {
+            if c == '"' {
+                break;
+            } else if c == '\\' {
+                next_char = getc();
+                if let Some(c2) = next_char {
+                    buffer.push(c2);
+                } else {
+                    panic!("Unterminated \\");
+                }
+            }
+            buffer.push(c);
+        } else {
+            panic!("Unterminated string");
+        }
+    }
+
+    Ast::new(AstKind::AstStr(Str::new(buffer)))
+}
+
 fn read_ident(c: char) -> String {
     let mut buf = String::new();
     buf.push(c);
@@ -312,6 +362,8 @@ fn read_prim() -> Option<Ast> {
         if c.is_ascii_digit() {
             let n = c.to_digit(10).unwrap();
             return Some(read_number(n));
+        } else if c == '"' {
+            return Some(read_string());
         } else if c.is_alphabetic() {
             return Some(read_ident_or_func(c));
         }
@@ -319,7 +371,7 @@ fn read_prim() -> Option<Ast> {
     None
 }
 
-fn print_quote(q: String) {
+fn print_quote(q: &String) {
     for c in q.chars() {
         if c == '"' || c == '\\' {
             print!("\\");
@@ -328,17 +380,19 @@ fn print_quote(q: String) {
     }
 }
 
-pub fn emit_string(val: String) {
+pub fn emit_data_section() {
+    let strings = CONTEXT.lock().unwrap().get_strings().clone();
+    if strings.is_empty() {
+        return;
+    }
     print!("\t.data\n");
-    print!(".mydata:\n\t");
-    print!(".string \"");
-    print_quote(val);
-    print!("\"\n\t");
-    print!(".text\n\t");
-    print!(".global stringfn\n");
-    print!("stringfn:\n\t");
-    print!("lea .mydata(%rip), %rax\n\t");
-    print!("ret\n");
+    for p in strings {
+        print!(".s{}:\n\t", p.sid);
+        print!(".string \"");
+        print_quote(&p.sval);
+        print!("\"\n");
+    }
+    print!("\t");
 }
 
 fn priority(c: char) -> i8 {
