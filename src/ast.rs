@@ -66,6 +66,7 @@ impl Str {
 pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
     AstInt(u32),
+    AstChar(char),
     AstStr(Str),
     AstVar(Var),
     AstFuncCall(FuncCall),
@@ -89,6 +90,7 @@ impl Ast {
     pub fn emit_expr(&self) {
         match self.kind {
             AstKind::AstInt(ival) => print!("mov ${}, %eax\n\t", ival),
+            AstKind::AstChar(c) => print!("mov ${}, %eax\n\t", c as i8),
             AstKind::AstVar(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
             AstKind::AstStr(ref ast_str) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
             AstKind::AstFuncCall(ref func_call) => {
@@ -169,6 +171,7 @@ impl Ast {
                 print!(")");
             }
             AstInt(val) => print!("{}", val),
+            AstChar(c) => print!("'{}'", c),
             AstVar(ref var) => print!("{}", var.name),
             AstStr(ref ast_str) => {
                 print!("\"");
@@ -290,6 +293,47 @@ fn read_string() -> Ast {
     Ast::new(AstKind::AstStr(Str::new(buffer)))
 }
 
+fn read_char() -> Ast {
+    let next_char: Option<char> = getc();
+    match next_char {
+        Some(c) => {
+            if c == '\\' {
+                if getc().is_none() {
+                    panic!("Unterminated \\");
+                }
+            }
+            if let Some(c2) = getc() {
+                if c2 != '\'' {
+                    panic!("Malformed char constant");
+                }
+            } else {
+                panic!("Unterminated \\");
+            }
+            return Ast::new(AstKind::AstChar(c));
+        }
+        None => panic!("Unterminated string"),
+    }
+}
+
+fn read_prim() -> Option<Ast> {
+    let next_char: Option<char> = getc();
+    if let Some(c) = next_char {
+        if c.is_ascii_digit() {
+            let n = c.to_digit(10).unwrap();
+            return Some(read_number(n));
+        } else if c == '"' {
+            return Some(read_string());
+        } else if c == '\'' {
+            return Some(read_char());
+        } else if c.is_alphabetic() {
+            return Some(read_ident_or_func(c));
+        }
+        panic!("Don't know how to handle '{}'", c);
+    }
+    None
+}
+
+
 fn read_ident(c: char) -> String {
     let mut buf = String::new();
     buf.push(c);
@@ -351,25 +395,6 @@ fn read_ident_or_func(c: char) -> Ast {
     };
 
     Ast::new(AstKind::AstVar(v))
-}
-
-
-fn read_prim() -> Option<Ast> {
-    let next_char: Option<char>;
-    {
-        next_char = getc();
-    }
-    if let Some(c) = next_char {
-        if c.is_ascii_digit() {
-            let n = c.to_digit(10).unwrap();
-            return Some(read_number(n));
-        } else if c == '"' {
-            return Some(read_string());
-        } else if c.is_alphabetic() {
-            return Some(read_ident_or_func(c));
-        }
-    }
-    None
 }
 
 fn print_quote(q: &String) {
