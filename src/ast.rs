@@ -12,12 +12,10 @@ pub struct Var {
 
 impl Var {
     pub fn new(name: String) -> Self {
-        let ret = Self {
+        Self {
             name: name,
             pos: CONTEXT.lock().unwrap().get_vars_len() + 1,
-        };
-        CONTEXT.lock().unwrap().push_var(ret.clone());
-        ret
+        }
     }
 }
 
@@ -57,12 +55,10 @@ pub struct Str {
 
 impl Str {
     pub fn new(sval: String) -> Self {
-        let ret = Self {
+        Self {
             sval: sval,
             sid: CONTEXT.lock().unwrap().get_strings_len() + 1,
-        };
-        CONTEXT.lock().unwrap().push_string(ret.clone());
-        ret
+        }
     }
 }
 
@@ -82,6 +78,11 @@ pub struct Ast {
 
 impl Ast {
     fn new(kind: AstKind) -> Self {
+        match kind {
+            AstKind::AstStr(ref str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone()),
+            AstKind::AstVar(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
+            _ => (),
+        }
         Self { kind: kind }
     }
 
