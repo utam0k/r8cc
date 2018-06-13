@@ -77,6 +77,9 @@ pub struct Ast {
     pub kind: AstKind,
 }
 
+/// 1. Call read_expr() for each ';'.
+/// 2. Call emit_data_section().
+/// 3. Call emit_expr() or print_ast().
 impl Ast {
     fn new(kind: AstKind) -> Self {
         match kind {
@@ -213,10 +216,11 @@ fn read_expr2(prec: i8) -> Option<Ast> {
     let mut op: AstKind;
 
     skip_space();
+
     if let Some(ret_val) = read_prim() {;
         ast = ret_val;
     } else {
-        return None;
+        return None; // Reach ';'.
     }
 
     loop {
@@ -225,12 +229,23 @@ fn read_expr2(prec: i8) -> Option<Ast> {
         match next_char {
             Some(c) => {
                 let prec2 = priority(c);
+                // Not =, +, -, * and / || priority of arithmetic operation
                 if prec2 < 0 || prec2 < prec {
                     ungetc();
                     return Some(ast);
                 }
 
                 skip_space();
+
+                // Exmple: 1+2+3;
+                // Ast {
+                //     kind: AstOp('+',
+                //                 Ast { kind: AstOp('+',
+                //                                   Ast { kind: AstInt(1) },
+                //                                   Ast { kind: AstInt(2) })
+                //                     },
+                //                 Ast { kind: AstInt(3) })
+                // }
                 if let Some(right) = read_expr2(prec2 + 1) {
                     op = AstKind::AstOp(c, Box::new(ast.clone()), Box::new(right));
                     ast = Ast::new(op);
