@@ -67,7 +67,7 @@ pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
     AstInt(u32),
     AstStr(Str),
-    AstSym(Var),
+    AstVar(Var),
     AstFuncCall(FuncCall),
 }
 
@@ -89,7 +89,7 @@ impl Ast {
     pub fn emit_expr(&self) {
         match self.kind {
             AstKind::AstInt(ival) => print!("mov ${}, %eax\n\t", ival),
-            AstKind::AstSym(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
+            AstKind::AstVar(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
             AstKind::AstStr(ref ast_str) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
             AstKind::AstFuncCall(ref func_call) => {
                 let args_len = func_call.args.len();
@@ -122,7 +122,7 @@ impl Ast {
                     '=' => {
                         right.emit_expr();
                         match left.kind {
-                            AstKind::AstSym(ref var) => {
+                            AstKind::AstVar(ref var) => {
                                 print!("mov %eax, -{}(%rbp)\n\t", var.pos * 4)
                             }
                             _ => panic!("invalid operand"),
@@ -169,7 +169,7 @@ impl Ast {
                 print!(")");
             }
             AstInt(val) => print!("{}", val),
-            AstSym(ref var) => print!("{}", var.name),
+            AstVar(ref var) => print!("{}", var.name),
             AstStr(ref ast_str) => {
                 print!("\"");
                 print_quote(&ast_str.sval);
@@ -350,7 +350,7 @@ fn read_ident_or_func(c: char) -> Ast {
         v = Var::new(name);
     };
 
-    Ast::new(AstKind::AstSym(v))
+    Ast::new(AstKind::AstVar(v))
 }
 
 
