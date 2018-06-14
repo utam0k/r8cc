@@ -1,6 +1,7 @@
 use std::collections::LinkedList;
 
-use ast::{Var, Str as AstStr};
+use Var;
+use Str as AstStr;
 
 #[derive(Debug)]
 pub struct Context {
