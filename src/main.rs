@@ -7,7 +7,7 @@ fn main() -> io::Result<()> {
     let wantast = env::args().len() > 1;
     let mut exprs: Vec<r8cc::Ast> = Vec::new();
     loop {
-        if let Some(t) = r8cc::read_expr() {
+        if let Some(t) = r8cc::read_decl_or_stmt() {
             exprs.push(t);
         } else {
             break;

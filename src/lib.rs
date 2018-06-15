@@ -54,7 +54,7 @@ pub struct Var {
 }
 
 impl Var {
-    pub fn new(name: String, ctype: Ctype) -> Self {
+    pub fn new(ctype: Ctype, name: String) -> Self {
         Self {
             name: name,
             pos: CONTEXT.lock().unwrap().get_vars_len() + 1,
@@ -114,6 +114,18 @@ pub enum Ctype {
     Str,
 }
 
+impl Ctype {
+    pub fn as_string(&self) -> &str {
+        use Ctype::*;
+        match self {
+            Void => "void",
+            Int => "int",
+            Char => "char",
+            Str => "string",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
@@ -168,7 +180,16 @@ impl Ast {
                     print!("pop %{}\n\t", REGS[i]);
                 }
             }
+            AstKind::AstDecl(ref decl_var, ref decl_init) => decl_var.emit_assign(decl_init),
             _ => self.emit_binop(),
+        }
+    }
+
+    fn emit_assign(&self, value: &Box<Self>) {
+        value.emit_expr();
+        match self.kind {
+            AstKind::AstVar(ref var) => print!("mov %eax, -{}(%rbp)\n\t", var.pos * 4),
+            _ => panic!("invalid operand"),
         }
     }
 
@@ -178,13 +199,14 @@ impl Ast {
             AstKind::AstOp(kind, ref left, ref right) => {
                 match kind {
                     '=' => {
-                        right.emit_expr();
-                        match left.kind {
-                            AstKind::AstVar(ref var) => {
-                                print!("mov %eax, -{}(%rbp)\n\t", var.pos * 4)
-                            }
-                            _ => panic!("invalid operand"),
-                        }
+                        left.emit_assign(right);
+                        // right.emit_expr();
+                        // match left.kind {
+                        //     AstKind::AstVar(ref var) => {
+                        //         print!("mov %eax, -{}(%rbp)\n\t", var.pos * 4)
+                        //     }
+                        //     _ => panic!("invalid operand"),
+                        // }
                         return;
                     }
                     '+' => "add",
@@ -244,6 +266,16 @@ impl Ast {
                 }
                 print!(")");
             }
+            AstDecl(ref decl_var, ref decl_init) => {
+                let (ctype, vname) = match decl_var.kind {
+                    AstKind::AstVar(ref var) => (&var.ctype, &var.name),
+                    _ => panic!("variable expected"),
+                };
+
+                print!("(decl {} {} ", ctype.as_string(), vname);
+                decl_init.print_ast();
+                print!(")");
+            }
         }
     }
 
@@ -255,19 +287,7 @@ impl Ast {
     }
 }
 
-pub fn read_expr() -> Option<Ast> {
-    if let Some(r) = read_expr2(0) {
-        let tok = lex::read_token().unwrap();
-        if !tok.is_punct(&';') {
-            panic!("Unterminated expression: {}", tok.as_string());
-        }
-        return Some(r);
-    }
-    None
-}
-
-
-fn read_expr2(prec: i8) -> Option<Ast> {
+fn read_expr(prec: i8) -> Option<Ast> {
     let mut ast: Ast;
     let mut op: AstKind;
 
@@ -297,7 +317,7 @@ fn read_expr2(prec: i8) -> Option<Ast> {
                 //                     },
                 //                 Ast { kind: AstInt(3) })
                 // }
-                if let Some(right) = read_expr2(prec2 + 1) {
+                if let Some(right) = read_expr(prec2 + 1) {
                     if tok.is_punct(&'=') {
                         ast.ensure_lvalue();
                     }
@@ -341,7 +361,7 @@ fn read_func_args(fname: String) -> Ast {
             break;
         }
         tok.unget_token();
-        args.push(read_expr2(0).unwrap());
+        args.push(read_expr(0).unwrap());
         tok = lex::read_token().unwrap();
         if tok.is_punct(&')') {
             break;
@@ -364,14 +384,43 @@ fn read_ident_or_func(name: String) -> Ast {
         return read_func_args(name);
     }
     tok.unget_token();
-    let v: Var;
-    if let Some(v2) = find_var(&name) {
-        v = v2.clone();
+    if let Some(v) = find_var(&name) {
+        Ast::new(AstKind::AstVar(v))
     } else {
-        v = Var::new(name);
-    };
+        panic!("Undefined varaible: {}", name);
+    }
+}
 
-    Ast::new(AstKind::AstVar(v))
+fn read_decl() -> Ast {
+    let ctype = lex::read_token().unwrap().get_ctype().unwrap();
+    let name = lex::read_token().unwrap();
+    match name {
+        lex::Token::TtypeIdent(ref sval) => {
+            let var = Ast::new(AstKind::AstVar(Var::new(ctype, sval.clone())));
+            lex::expect('=');
+            let init = read_expr(0).unwrap();
+            Ast::new(AstKind::AstDecl(Box::new(var), Box::new(init)))
+        }
+        _ => panic!("Identifier expected, but got {}", name.as_string()),
+    }
+}
+
+pub fn read_decl_or_stmt() -> Option<Ast> {
+    if let Some(tok) = lex::peek_token() {
+        let r = if tok.is_type_keyword() {
+            Some(read_decl())
+        } else {
+            read_expr(0)
+        };
+        if let Some(tok) = lex::read_token() {
+            if !tok.is_punct(&';') {
+                panic!("Unterminated expression: {}", tok.as_string());
+            }
+        };
+        r
+    } else {
+        None
+    }
 }
 
 fn print_quote(q: &String) {

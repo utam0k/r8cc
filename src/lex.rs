@@ -39,7 +39,7 @@ impl Token {
         }
     }
 
-    fn get_ctype(&self) -> Option<Ctype> {
+    pub fn get_ctype(&self) -> Option<Ctype> {
         use Ctype::*;
         match self {
             Token::TtypeIdent(ref sval) => {
@@ -153,10 +153,13 @@ fn read_token_int() -> Option<Token> {
     }
 }
 
-pub fn peek_token() -> Token {
-    let tok = read_token().unwrap();
-    tok.unget_token();
-    tok
+pub fn peek_token() -> Option<Token> {
+    if let Some(tok) = read_token() {
+        tok.unget_token();
+        Some(tok)
+    } else {
+        None
+    }
 }
 
 pub fn read_token() -> Option<Token> {
@@ -170,7 +173,7 @@ pub fn read_token() -> Option<Token> {
     read_token_int()
 }
 
-fn expect(punct: char) {
+pub fn expect(punct: char) {
     let tok = read_token().unwrap();
     if !tok.is_punct(&punct) {
         panic!("'{}' expected, but got {}", punct, tok.as_string());
