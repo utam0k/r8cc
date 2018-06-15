@@ -49,14 +49,14 @@ impl Stream {
         self.data.last()
     }
 
-    pub fn skip_space(&mut self) {
+    pub fn get_nonspace(&mut self) -> Option<char> {
         for c in self.data[self.pos..].iter() {
             self.pos += 1;
-            if c.is_whitespace() {
+            if c.is_whitespace() || c == &'\n' || c == &'\r' {
                 continue;
             }
-            self.pos -= 1;
-            return;
+            return Some(c.clone());
         }
+        None
     }
 }

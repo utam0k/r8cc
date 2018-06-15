@@ -1,4 +1,5 @@
-use r8cc_io::{getc, ungetc, skip_space};
+use r8cc_io::{getc, ungetc, get_nonspace};
+use Ctype;
 
 static mut UNGOTTEN: Option<Token> = None;
 
@@ -36,6 +37,25 @@ impl Token {
             }
             UNGOTTEN = Some(self.clone())
         }
+    }
+
+    fn get_ctype(&self) -> Option<Ctype> {
+        use Ctype::*;
+        match self {
+            Token::TtypeIdent(ref sval) => {
+                match sval.trim() {
+                    "int" => Some(Int),
+                    "char" => Some(Char),
+                    "string" => Some(Str),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_type_keyword(&self) -> bool {
+        self.get_ctype().is_some()
     }
 }
 
@@ -118,20 +138,25 @@ fn read_ident(c: char) -> Token {
 }
 
 fn read_token_int() -> Option<Token> {
-    skip_space();
-    if let Some(c) = getc() {
+    if let Some(c) = get_nonspace() {
         let res = match c {
             '0'...'9' => read_number(c),
             '"' => read_string(),
             '\'' => read_char(),
-            'a'...'z' | 'A'...'Z' | '_' => read_ident(c),
-            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' => Token::TtypePunct(c),
+            'a'...'z' | 'A'...'Z' | '_' => read_ident(c.clone()),
+            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' => Token::TtypePunct(c.clone()),
             _ => panic!("Unexpected character: '{}'", c),
         };
         return Some(res);
     } else {
         return None;
     }
+}
+
+pub fn peek_token() -> Token {
+    let tok = read_token().unwrap();
+    tok.unget_token();
+    tok
 }
 
 pub fn read_token() -> Option<Token> {
@@ -143,4 +168,11 @@ pub fn read_token() -> Option<Token> {
         }
     }
     read_token_int()
+}
+
+fn expect(punct: char) {
+    let tok = read_token().unwrap();
+    if !tok.is_punct(&punct) {
+        panic!("'{}' expected, but got {}", punct, tok.as_string());
+    }
 }

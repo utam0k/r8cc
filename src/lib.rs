@@ -38,8 +38,8 @@ mod r8cc_io {
         INPUT.lock().unwrap().prev()
     }
 
-    pub fn skip_space() {
-        INPUT.lock().unwrap().skip_space()
+    pub fn get_nonspace() -> Option<char> {
+        INPUT.lock().unwrap().get_nonspace()
     }
 }
 
@@ -50,13 +50,15 @@ const MAX_ARGS: usize = 6;
 pub struct Var {
     name: String,
     pos: usize,
+    ctype: Ctype,
 }
 
 impl Var {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: String, ctype: Ctype) -> Self {
         Self {
             name: name,
             pos: CONTEXT.lock().unwrap().get_vars_len() + 1,
+            ctype: ctype,
         }
     }
 }
@@ -105,6 +107,14 @@ impl Str {
 }
 
 #[derive(Clone, Debug)]
+pub enum Ctype {
+    Void,
+    Int,
+    Char,
+    Str,
+}
+
+#[derive(Clone, Debug)]
 pub enum AstKind {
     AstOp(char, Box<Ast>, Box<Ast>),
     AstInt(u32),
@@ -112,6 +122,7 @@ pub enum AstKind {
     AstStr(Str),
     AstVar(Var),
     AstFuncCall(FuncCall),
+    AstDecl(Box<Ast>, Box<Ast>),
 }
 
 #[derive(Clone, Debug)]
@@ -235,6 +246,13 @@ impl Ast {
             }
         }
     }
+
+    pub fn ensure_lvalue(&self) -> bool {
+        match self.kind {
+            AstKind::AstVar(_) => true,
+            _ => panic!("variable expected"),
+        }
+    }
 }
 
 pub fn read_expr() -> Option<Ast> {
@@ -280,6 +298,9 @@ fn read_expr2(prec: i8) -> Option<Ast> {
                 //                 Ast { kind: AstInt(3) })
                 // }
                 if let Some(right) = read_expr2(prec2 + 1) {
+                    if tok.is_punct(&'=') {
+                        ast.ensure_lvalue();
+                    }
                     op = AstKind::AstOp(punct, Box::new(ast.clone()), Box::new(right));
                     ast = Ast::new(op);
                 } else {
