@@ -22,7 +22,7 @@ fn main() -> io::Result<()> {
 
     for ast in exprs {
         if wantast {
-            ast.print_ast();
+            print!("{}", ast.to_string());
         } else {
             ast.emit_expr();
         }

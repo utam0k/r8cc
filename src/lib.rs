@@ -8,6 +8,7 @@ extern crate lazy_static;
 use std::sync::Mutex;
 use std::marker::Send;
 use std::io::stdin;
+use std::mem;
 
 unsafe impl Send for context::Context {}
 unsafe impl Send for stream::Stream {}
@@ -106,7 +107,7 @@ impl Str {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Ctype {
     Void,
     Int,
@@ -128,10 +129,10 @@ impl Ctype {
 
 #[derive(Clone, Debug)]
 pub enum AstKind {
-    AstOp(char, Box<Ast>, Box<Ast>),
-    AstInt(u32),
-    AstChar(char),
-    AstStr(Str),
+    AstOp(char, Ctype, Box<Ast>, Box<Ast>),
+    AstInt(u32, Ctype),
+    AstChar(char, Ctype),
+    AstStr(Str, Ctype),
     AstVar(Var),
     AstFuncCall(FuncCall),
     AstDecl(Box<Ast>, Box<Ast>),
@@ -148,19 +149,41 @@ pub struct Ast {
 impl Ast {
     fn new(kind: AstKind) -> Self {
         match kind {
-            AstKind::AstStr(ref str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone()),
+            AstKind::AstStr(ref str_val, ..) => {
+                CONTEXT.lock().unwrap().push_string(str_val.clone())
+            }
             AstKind::AstVar(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
             _ => (),
         }
         Self { kind: kind }
     }
 
+    fn make_op(kind: char, ctype: Ctype, left: Ast, right: Ast) -> Self {
+        Self::new(AstKind::AstOp(kind, ctype, Box::new(left), Box::new(right)))
+    }
+
+    fn make_int(val: u32) -> Self {
+        Self::new(AstKind::AstInt(val, Ctype::Int))
+    }
+
+    fn make_char(c: char) -> Self {
+        Self::new(AstKind::AstChar(c, Ctype::Char))
+    }
+
+    fn make_string(sval: String) -> Self {
+        Self::new(AstKind::AstStr(Str::new(sval), Ctype::Str))
+    }
+
+    pub fn to_string(&self) -> String {
+        self.to_string_int()
+    }
+
     pub fn emit_expr(&self) {
         match self.kind {
-            AstKind::AstInt(ival) => print!("mov ${}, %eax\n\t", ival),
-            AstKind::AstChar(c) => print!("mov ${}, %eax\n\t", c as i8),
+            AstKind::AstInt(ival, ..) => print!("mov ${}, %eax\n\t", ival),
+            AstKind::AstChar(c, ..) => print!("mov ${}, %eax\n\t", c as i8),
             AstKind::AstVar(ref var) => print!("mov -{}(%rbp), %eax\n\t", var.pos * 4),
-            AstKind::AstStr(ref ast_str) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
+            AstKind::AstStr(ref ast_str, _) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
             AstKind::AstFuncCall(ref func_call) => {
                 let args_len = func_call.args.len();
 
@@ -196,7 +219,7 @@ impl Ast {
     fn emit_binop(&self) {
         let op: &str;
         op = match self.kind {
-            AstKind::AstOp(kind, ref left, ref right) => {
+            AstKind::AstOp(kind, _, ref left, ref right) => {
                 match kind {
                     '=' => {
                         left.emit_assign(right);
@@ -220,7 +243,7 @@ impl Ast {
         };
 
         match self.kind {
-            AstKind::AstOp(kind, ref left, ref right) => {
+            AstKind::AstOp(kind, _, ref left, ref right) => {
                 left.emit_expr();
                 print!("push %rax\n\t");
                 right.emit_expr();
@@ -238,33 +261,33 @@ impl Ast {
         }
     }
 
-    pub fn print_ast(&self) {
+    pub fn to_string_int(&self) -> String {
         use self::AstKind::*;
+        let mut buf = String::new();
         match self.kind {
-            AstOp(kind, ref left, ref right) => {
-                print!("({} ", kind);
-                left.print_ast();
-                print!(" ");
-                right.print_ast();
-                print!(")");
+            AstOp(kind, _, ref left, ref right) => {
+                buf.push_str(&format!(
+                    "({} {} {})",
+                    kind,
+                    left.to_string_int(),
+                    right.to_string_int()
+                ));
             }
-            AstInt(val) => print!("{}", val),
-            AstChar(c) => print!("'{}'", c),
-            AstVar(ref var) => print!("{}", var.name),
-            AstStr(ref ast_str) => {
-                print!("\"");
-                print_quote(&ast_str.sval);
-                print!("\"");
+            AstInt(val, _) => buf.push_str(&format!("{}", val)),
+            AstChar(c, _) => buf.push_str(&format!("'{}'", c)),
+            AstVar(ref var) => buf.push_str(&var.name),
+            AstStr(ref ast_str, _) => {
+                buf.push_str(&format!("\"{}\"", quote(&ast_str.sval)));
             }
             AstFuncCall(ref func_call) => {
-                print!("{}(", func_call.fname);
+                buf.push_str(&format!("{}(", func_call.fname));
                 for i in 0..func_call.args.len() {
-                    func_call.args[i].print_ast();
+                    buf.push_str(&func_call.args[i].to_string());
                     if i + 1 < func_call.args.len() {
-                        print!(",");
+                        buf.push(',');
                     }
                 }
-                print!(")");
+                buf.push(')');
             }
             AstDecl(ref decl_var, ref decl_init) => {
                 let (ctype, vname) = match decl_var.kind {
@@ -272,11 +295,15 @@ impl Ast {
                     _ => panic!("variable expected"),
                 };
 
-                print!("(decl {} {} ", ctype.as_string(), vname);
-                decl_init.print_ast();
-                print!(")");
+                buf.push_str(&format!(
+                    "(decl {} {} {})",
+                    ctype.as_string(),
+                    vname,
+                    decl_init.to_string()
+                ));
             }
-        }
+        };
+        return buf;
     }
 
     pub fn ensure_lvalue(&self) -> bool {
@@ -285,11 +312,66 @@ impl Ast {
             _ => panic!("variable expected"),
         }
     }
+
+    pub fn get_ctype(&self) -> Option<&Ctype> {
+        use AstKind::*;
+        match self.kind {
+            AstOp(_, ref ctype, ..) |
+            AstInt(_, ref ctype) |
+            AstChar(_, ref ctype) |
+            AstStr(_, ref ctype) => Some(ctype),
+            AstVar(ref var) => Some(&var.ctype),
+            _ => None,
+        }
+    }
+}
+
+fn result_type(op: char, mut a: Ast, mut b: Ast) -> Ctype {
+    use Ctype::*;
+    let mut swapped = false;
+    let mut a_type = a.get_ctype().unwrap().clone();
+    let mut b_type = b.get_ctype().unwrap().clone();
+    if a_type > b_type {
+        swapped = true;
+        mem::swap(&mut a, &mut b);
+        mem::swap(&mut a_type, &mut b_type);
+    }
+
+    match a_type {
+        Void => {
+            error(a, b, op, swapped);
+        }
+        Int => {
+            match b_type {
+                Int => return Int,
+                Char => return Int,
+                Str => error(a, b, op, swapped),
+                _ => panic!("Internal Error"),
+            }
+        }
+        Char => {
+            match b_type {
+                Char => return Int,
+                Str => error(a, b, op, swapped),
+                _ => panic!("Internal Error"),
+            }
+        }
+        Str => error(a, b, op, swapped),
+    }
+    return Int;
+
+    fn error(mut a: Ast, mut b: Ast, op: char, swapped: bool) {
+        if swapped {
+            mem::swap(&mut a, &mut b);
+        }
+        // TODO
+        panic!("incompatible operands: {:?} and {:?} for {}", a, b, op);
+    }
+
 }
 
 fn read_expr(prec: i8) -> Option<Ast> {
     let mut ast: Ast;
-    let mut op: AstKind;
 
     if let Some(ret_val) = read_prim() {;
         ast = ret_val;
@@ -317,12 +399,13 @@ fn read_expr(prec: i8) -> Option<Ast> {
                 //                     },
                 //                 Ast { kind: AstInt(3) })
                 // }
-                if let Some(right) = read_expr(prec2 + 1) {
-                    if tok.is_punct(&'=') {
-                        ast.ensure_lvalue();
-                    }
-                    op = AstKind::AstOp(punct, Box::new(ast.clone()), Box::new(right));
-                    ast = Ast::new(op);
+                if tok.is_punct(&'=') {
+                    ast.ensure_lvalue();
+                }
+                if let Some(rest) = read_expr(prec2 + if is_right_assoc(punct) { 0 } else { 1 }) {
+                    // NN?
+                    let ctype = result_type(punct, ast.clone(), rest.clone());
+                    ast = Ast::make_op(punct, ctype, ast, rest);
                 } else {
                     panic!("Unterminated expression");
                 }
@@ -338,13 +421,12 @@ fn read_expr(prec: i8) -> Option<Ast> {
 
 fn read_prim() -> Option<Ast> {
     use lex::Token::*;
-    use AstKind::*;
     if let Some(token) = lex::read_token() {
         return Some(match token {
             TtypeIdent(sval) => read_ident_or_func(sval),
-            TtypeInt(ival) => Ast::new(AstInt(ival as u32)),
-            TtypeChar(c) => Ast::new(AstChar(c)),
-            TtypeString(sval) => Ast::new(AstStr(Str::new(sval))),
+            TtypeInt(ival) => Ast::make_int(ival as u32),
+            TtypeChar(c) => Ast::make_char(c),
+            TtypeString(sval) => Ast::make_string(sval),
             TtypePunct(punct) => panic!("unexpected character: '{}'", punct),
         });
     } else {
@@ -423,13 +505,15 @@ pub fn read_decl_or_stmt() -> Option<Ast> {
     }
 }
 
-fn print_quote(q: &String) {
+fn quote(q: &String) -> String {
+    let mut buf = String::new();
     for c in q.chars() {
         if c == '"' || c == '\\' {
-            print!("\\");
+            buf.push_str("\\");
         }
-        print!("{}", c);
+        buf.push(c);
     }
+    return buf;
 }
 
 pub fn emit_data_section() {
@@ -440,11 +524,14 @@ pub fn emit_data_section() {
     print!("\t.data\n");
     for p in strings {
         print!(".s{}:\n\t", p.sid);
-        print!(".string \"");
-        print_quote(&p.sval);
-        print!("\"\n");
+        print!(".string \"{}\"\n", quote(&p.sval));
     }
     print!("\t");
+}
+
+
+fn is_right_assoc(op: char) -> bool {
+    op == '='
 }
 
 fn priority(c: char) -> i8 {
