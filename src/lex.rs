@@ -1,6 +1,7 @@
 use r8cc_io::{getc, ungetc, get_nonspace};
 use Ctype;
 
+// For undo
 static mut UNGOTTEN: Option<Token> = None;
 
 #[derive(Clone, Debug)]
@@ -64,12 +65,14 @@ fn read_number(c: char) -> Token {
     loop {
         let next_char: Option<char>;
         next_char = getc();
-        if let Some(c) = next_char {
-            if !c.is_ascii_digit() {
+        if let Some(c2) = next_char {
+            if !c2.is_ascii_digit() {
                 ungetc();
                 return Token::TtypeInt(n as i32);
             }
-            n = n * 10 + c.to_digit(10).unwrap();
+            n = n * 10 + c2.to_digit(10).unwrap();
+        } else {
+            panic!("Unterminated expression");
         }
     }
 }
