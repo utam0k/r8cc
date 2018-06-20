@@ -41,13 +41,12 @@ impl Token {
     }
 
     pub fn get_ctype(&self) -> Option<Ctype> {
-        use Ctype::*;
         match self {
-            Token::TtypeIdent(ref sval) => {
+            Token::TtypeIdent(sval) => {
                 match sval.trim() {
-                    "int" => Some(Int),
-                    "char" => Some(Char),
-                    "string" => Some(Str),
+                    "int" => Some(Ctype::Int(None)),
+                    "char" => Some(Ctype::Char(None)),
+                    "string" => Some(Ctype::Str(None)),
                     _ => None,
                 }
             }
@@ -147,7 +146,9 @@ fn read_token_int() -> Option<Token> {
             '"' => read_string(),
             '\'' => read_char(),
             'a'...'z' | 'A'...'Z' | '_' => read_ident(c.clone()),
-            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' => Token::TtypePunct(c.clone()),
+            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' | '&' => Token::TtypePunct(
+                c.clone(),
+            ),
             _ => panic!("Unexpected character: '{}'", c),
         };
         return Some(res);

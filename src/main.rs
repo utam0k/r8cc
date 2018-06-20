@@ -18,6 +18,14 @@ fn main() -> io::Result<()> {
         print!(".text\n\t");
         print!(".global mymain\n");
         print!("mymain:\n\t");
+        print!("push %rbp\n\t");
+        print!("mov %rsp, %rbp\n\t");
+
+        let mut vars = r8cc::CONTEXT.lock().unwrap().get_vars().clone();
+
+        if !vars.is_empty() {
+            print!("sub ${}, %rsp\n\t", vars.pop_front().unwrap().vpos * 8);
+        }
     }
 
     for ast in exprs {
@@ -29,6 +37,7 @@ fn main() -> io::Result<()> {
     }
 
     if !wantast {
+        print!("leave\n\t");
         print!("ret\n");
     }
 
