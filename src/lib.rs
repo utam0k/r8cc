@@ -8,7 +8,6 @@ extern crate lazy_static;
 use std::sync::Mutex;
 use std::marker::Send;
 use std::io::stdin;
-use std::mem;
 
 unsafe impl Send for context::Context {}
 unsafe impl Send for stream::Stream {}
@@ -131,14 +130,14 @@ impl Ctype {
 
 #[derive(Clone, Debug)]
 pub enum AstKind {
-    AstBinop(char, Ctype, Box<Ast>, Box<Ast>),
-    AstUop(Box<AstKind>, Ctype, Box<Ast>),
-    AstLiteral(Ctype),
-    AstVar(Var),
-    AstFuncCall(FuncCall),
-    AstDecl(Box<Ast>, Box<Ast>),
-    AstAddr(Box<Ast>, Ctype),
-    AstDeref(Box<Ast>, Ctype),
+    Binop(char, Ctype, Box<Ast>, Box<Ast>),
+    Uop(Box<AstKind>, Ctype, Box<Ast>),
+    Literal(Ctype),
+    Var(Var),
+    FuncCall(FuncCall),
+    Decl(Box<Ast>, Box<Ast>),
+    Addr(Box<Ast>, Ctype),
+    Deref(Box<Ast>, Ctype),
 }
 
 macro_rules! matches(
@@ -161,31 +160,31 @@ pub struct Ast {
 impl Ast {
     fn new(kind: AstKind) -> Self {
         match kind {
-            AstKind::AstLiteral(ref ctype) => 
+            AstKind::Literal(ref ctype) => 
                 match ctype {
                     Ctype::Str(str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone().unwrap()),
                     _ => ()
                 }
-            AstKind::AstVar(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
+            AstKind::Var(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
             _ => (),
         }
         Self { kind: kind }
     }
 
     fn make_binop(kind: char, ctype: Ctype, left: Ast, right: Ast) -> Self {
-        Self::new(AstKind::AstBinop(kind, ctype, Box::new(left), Box::new(right)))
+        Self::new(AstKind::Binop(kind, ctype, Box::new(left), Box::new(right)))
     }
 
     fn make_int(val: i32) -> Self {
-        Self::new(AstKind::AstLiteral(Ctype::Int(Some(val))))
+        Self::new(AstKind::Literal(Ctype::Int(Some(val))))
     }
 
     fn make_char(c: char) -> Self {
-        Self::new(AstKind::AstLiteral(Ctype::Char(Some(c))))
+        Self::new(AstKind::Literal(Ctype::Char(Some(c))))
     }
 
     fn make_string(sval: String) -> Self {
-        Self::new(AstKind::AstLiteral(Ctype::Str(Some(Str::new(sval)))))
+        Self::new(AstKind::Literal(Ctype::Str(Some(Str::new(sval)))))
     }
 
     pub fn to_string(&self) -> String {
@@ -197,7 +196,7 @@ impl Ast {
         use self::Ctype::*;
 
         match self.kind {
-            AstLiteral(ref ctype) => {
+            Literal(ref ctype) => {
                 match ctype {
                     Int(Some(ival))=> print!("mov ${}, %rax\n\t", ival),
                     Char(Some(c))=> print!("mov ${}, %rax\n\t", c.to_owned() as i8),
@@ -205,8 +204,8 @@ impl Ast {
                     _ => panic!("internal error"),
                 }
             }
-            AstVar(ref var) => print!("mov -{}(%rbp), %rax\n\t", var.vpos * 8),
-            AstFuncCall(ref func_call) => {
+            Var(ref var) => print!("mov -{}(%rbp), %rax\n\t", var.vpos * 8),
+            FuncCall(ref func_call) => {
                 let args_len = func_call.args.len();
 
                 for i in 1..args_len {
@@ -225,15 +224,15 @@ impl Ast {
                     print!("pop %{}\n\t", REGS[i]);
                 }
             }
-           AstDecl(ref decl_var, ref decl_init) => decl_var.emit_assign(decl_init),
-           AstAddr(ref operand, _) => {
-               assert!(matches!(operand.kind, AstKind::AstVar(_)));
+           Decl(ref decl_var, ref decl_init) => decl_var.emit_assign(decl_init),
+           Addr(ref operand, _) => {
+               assert!(matches!(operand.kind, AstKind::Var(_)));
                match operand.kind {
-                   AstKind::AstVar(ref var)=> print!("lea -{}(%rbp), %rax\n\t", var.vpos * 8),
+                   AstKind::Var(ref var)=> print!("lea -{}(%rbp), %rax\n\t", var.vpos * 8),
                    _ => (),
                }
            }
-           AstDeref(ref operand, _) => {
+           Deref(ref operand, _) => {
                assert!(matches!(operand.get_ctype(), Some(Ctype::Ptr(_))));
                operand.emit_expr();
                print!("mov (%rax), %rax\n\t");
@@ -245,7 +244,7 @@ impl Ast {
     fn emit_assign(&self, value: &Box<Self>) {
         value.emit_expr();
         match self.kind {
-            AstKind::AstVar(ref var) => print!("mov %rax, -{}(%rbp)\n\t", var.vpos * 8),
+            AstKind::Var(ref var) => print!("mov %rax, -{}(%rbp)\n\t", var.vpos * 8),
             _ => panic!("invalid operand"),
         }
     }
@@ -253,7 +252,7 @@ impl Ast {
     fn emit_binop(&self) {
         let op: &str;
         op = match self.kind {
-            AstKind::AstBinop(kind, _, ref left, ref right) => {
+            AstKind::Binop(kind, _, ref left, ref right) => {
                 match kind {
                     '=' => {
                         left.emit_assign(right);
@@ -270,7 +269,7 @@ impl Ast {
         };
 
         match self.kind {
-            AstKind::AstBinop(kind, _, ref left, ref right) => {
+            AstKind::Binop(kind, _, ref left, ref right) => {
                 left.emit_expr();
                 print!("push %rax\n\t");
                 right.emit_expr();
@@ -292,7 +291,7 @@ impl Ast {
         use self::AstKind::*;
         let mut buf = String::new();
         match self.kind {
-            AstBinop(kind, _, ref left, ref right) => {
+            Binop(kind, _, ref left, ref right) => {
                 buf.push_str(&format!(
                     "({} {} {})",
                     kind,
@@ -300,16 +299,16 @@ impl Ast {
                     right.to_string_int()
                 ));
             }
-            AstLiteral(ref ctype) => match ctype {
+            Literal(ref ctype) => match ctype {
                 Ctype::Int(val) => buf.push_str(&format!("{}", val.unwrap())),
                 Ctype::Char(c) => buf.push_str(&format!("'{}'", c.unwrap())),
-                Ctype::Str(ast_str) => {
-                    buf.push_str(&format!("\"{}\"", quote(&ast_str.clone().unwrap().sval)));
+                Ctype::Str(Some(ast_str)) => {
+                    buf.push_str(&format!("\"{}\"", quote(&ast_str.sval)));
                 }
                 _ => panic!("literal expected"),
             }
-            AstVar(ref var) => buf.push_str(&var.name),
-            AstFuncCall(ref func_call) => {
+            Var(ref var) => buf.push_str(&var.name),
+            FuncCall(ref func_call) => {
                 buf.push_str(&format!("{}(", func_call.fname));
                 for i in 0..func_call.args.len() {
                     buf.push_str(&func_call.args[i].to_string());
@@ -319,9 +318,9 @@ impl Ast {
                 }
                 buf.push(')');
             }
-            AstDecl(ref decl_var, ref decl_init) => {
+            Decl(ref decl_var, ref decl_init) => {
                 let (ctype, vname) = match decl_var.kind {
-                    AstKind::AstVar(ref var) => (&var.ctype, &var.name),
+                    AstKind::Var(ref var) => (&var.ctype, &var.name),
                     _ => panic!("variable expected"),
                 };
 
@@ -332,20 +331,21 @@ impl Ast {
                     decl_init.to_string()
                 ));
             }
-            AstAddr(ref operand, _) => {
+            Addr(ref operand, _) => {
                 buf.push_str(&format!("(& {})", operand.to_string()));
             }
-            AstDeref(ref operand, _) => {
+            Deref(ref operand, _) => {
                 buf.push_str(&format!("(* {})", operand.to_string()));
             }
             _ => panic!("No implement"),
         };
-        return buf;
+        
+        buf
     }
 
     pub fn ensure_lvalue(&self) -> bool {
         match self.kind {
-            AstKind::AstVar(_) => true,
+            AstKind::Var(_) => true,
             _ => panic!("variable expected"),
         }
     }
@@ -353,47 +353,46 @@ impl Ast {
     pub fn get_ctype(&self) -> Option<&Ctype> {
         use AstKind::*;
         match self.kind {
-            AstBinop(_, ref ctype, ..) |
-            AstLiteral(ref ctype) => Some(ctype),
-            AstVar(ref var) => Some(&var.ctype),
-            AstAddr(_, ref ctype) => Some(&ctype),
-            AstDeref(_, ref ctype) => Some(&ctype),
+            Binop(_, ref ctype, ..) |
+            Literal(ref ctype) => Some(ctype),
+            Var(ref var) => Some(&var.ctype),
+            Addr(_, ref ctype) => Some(&ctype),
+            Deref(_, ref ctype) => Some(&ctype),
             _ => None,
         }
     }
 }
 
-fn result_type_int(op: char, mut a_type: Ctype, mut b_type: Ctype) -> Ctype {
+fn result_type_int(op: char, a_type: &Ctype, b_type: &Ctype) -> Ctype {
     use Ctype::*;
-    let mut swapped = false;
+    let types;
     if a_type > b_type {
-        swapped = true;
-        mem::swap(&mut a_type, &mut b_type);
+        types = (b_type, a_type);
+    } else {
+        types = (a_type, b_type);
     }
 
-    match a_type {
-        Void => {
-            error(a_type, b_type, op, swapped);
-        }
+    match types.0 {
+        Void => error(types, op),
         Int(_) => {
-            match b_type {
+            match types.1 {
                 Int(_) => return Int(None),
                 Char(_) => return Int(None),
-                Str(_) => error(a_type, b_type, op, swapped),
+                Str(_) => error(types, op),
                 _ => panic!("Internal Error"),
             }
         }
         Char(_) => {
-            match b_type {
+            match types.1 {
                 Char(_) => return Int(None),
-                Str(_) => error(a_type, b_type, op, swapped),
+                Str(_) => error(types, op),
                 _ => panic!("Internal Error"),
             }
         }
-        Str(_) => error(a_type, b_type, op, swapped),
+        Str(_) => error(types, op),
         Ptr(a_ptr) => {
-            match b_type {
-                Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, *a_ptr.clone(), *b_ptr.clone()))),
+            match types.1 {
+                Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, a_ptr, b_ptr))),
                 _ => panic!("Internal Error"),
             }
         }
@@ -401,17 +400,14 @@ fn result_type_int(op: char, mut a_type: Ctype, mut b_type: Ctype) -> Ctype {
 
     return Int(None);
 
-    fn error(mut a: Ctype, mut b: Ctype, op: char, swapped: bool) {
-        if swapped {
-            mem::swap(&mut a, &mut b);
-        }
+    fn error((a, b): (&Ctype, &Ctype), op: char) {
         panic!("incompatible operands: {:?} and {:?} for {}", a, b, op);
     }
 
 }
 
-fn result_type(op: char, a: Ast, b: Ast) -> Ctype {
-    return result_type_int(op, a.get_ctype().unwrap().clone(), b.get_ctype().unwrap().clone());
+fn result_type(op: char, a: &Ast, b: &Ast) -> Ctype {
+    result_type_int(op, a.get_ctype().unwrap(), b.get_ctype().unwrap())
 }
 
 fn read_expr(prec: i8) -> Option<Ast> {
@@ -436,19 +432,18 @@ fn read_expr(prec: i8) -> Option<Ast> {
 
                 // Exmple: 1+2+3;
                 // Ast {
-                //     kind: AstBinop('+',
-                //                 Ast { kind: AstBinop('+',
+                //     kind: Binop('+',
+                //                 Ast { kind: Binop('+',
                 //                                   Ast { kind: AstInt(1) },
                 //                                   Ast { kind: AstInt(2) })
                 //                     },
                 //                 Ast { kind: AstInt(3) })
                 // }
-                if tok.is_punct(&'=') {
+                if tok.is_punct('=') {
                     ast.ensure_lvalue();
                 }
                 if let Some(rest) = read_expr(prec2 + if is_right_assoc(punct) { 0 } else { 1 }) {
-                    // NN?
-                    let ctype = result_type(punct, ast.clone(), rest.clone());
+                    let ctype = result_type(punct, &ast, &rest);
                     ast = Ast::make_binop(punct, ctype, ast, rest);
                 } else {
                     panic!("Unterminated expression");
@@ -483,39 +478,38 @@ fn read_func_args(fname: String) -> Ast {
 
     for i in 0..MAX_ARGS {
         tok = lex::read_token().unwrap();
-        if tok.is_punct(&')') {
+        if tok.is_punct(')') {
             break;
         }
         tok.unget_token();
         args.push(read_expr(0).unwrap());
         tok = lex::read_token().unwrap();
-        if tok.is_punct(&')') {
+        if tok.is_punct(')') {
             break;
-        } else if !tok.is_punct(&',') {
+        } else if !tok.is_punct(',') {
             panic!("Unexpected token: '{}'", tok.as_string());
         }
-
 
         if i == MAX_ARGS {
             panic!("Too many arguments: {}", fname);
         }
     }
 
-    Ast::new(AstKind::AstFuncCall(FuncCall::new(fname, args)))
+    Ast::new(AstKind::FuncCall(FuncCall::new(fname, args)))
 }
 
 fn read_unary_expr() -> Option<Ast> {
     let tok = lex::read_token().unwrap();
-    if tok.is_punct(&'&') {
+    if tok.is_punct('&') {
         let operand = read_unary_expr().unwrap();
         operand.ensure_lvalue();
-        return Some(Ast::new(AstKind::AstAddr(Box::new(operand.clone()),Ctype::Ptr(Box::new(operand.get_ctype().unwrap().clone())))));
-    }
-    if tok.is_punct(&'*') {
+        let ctype = operand.get_ctype().unwrap().clone();
+        return Some(Ast::new(AstKind::Addr(Box::new(operand),Ctype::Ptr(Box::new(ctype)))));
+    } else if tok.is_punct('*') {
         let operand = read_unary_expr().unwrap();
-        let ctype = operand.get_ctype();
+        let ctype = operand.get_ctype().cloned();
         if let Some(Ctype::Ptr(ptr)) = ctype {
-            return Some(Ast::new(AstKind::AstDeref(Box::new(operand.clone()), Ctype::Ptr(ptr.clone()))));
+            return Some(Ast::new(AstKind::Deref(Box::new(operand), Ctype::Ptr(ptr))));
         } else {
             panic!("pointer type expected, but got {}", operand.to_string());
         }
@@ -527,12 +521,12 @@ fn read_unary_expr() -> Option<Ast> {
 
 fn read_ident_or_func(name: String) -> Ast {
     let tok = lex::read_token().unwrap();
-    if tok.is_punct(&'(') {
+    if tok.is_punct('(') {
         return read_func_args(name);
     }
     tok.unget_token();
     if let Some(v) = find_var(&name) {
-        Ast::new(AstKind::AstVar(v))
+        Ast::new(AstKind::Var(v))
     } else {
         panic!("Undefined varaible: {}", name);
     }
@@ -543,18 +537,18 @@ fn read_decl() -> Ast {
     let mut tok;
     loop {
         tok = lex::read_token().unwrap();
-        if !tok.is_punct(&'*') {
+        if !tok.is_punct('*') {
             break
         }
         ctype = Ctype::Ptr(Box::new(ctype));
     }
 
     match tok {
-        lex::Token::TtypeIdent(ref sval) => {
-            let var = Ast::new(AstKind::AstVar(Var::new(ctype, sval.clone())));
+        lex::Token::TtypeIdent(sval) => {
+            let var = Ast::new(AstKind::Var(Var::new(ctype, sval)));
             lex::expect('=');
             let init = read_expr(0).unwrap();
-            Ast::new(AstKind::AstDecl(Box::new(var), Box::new(init)))
+            Ast::new(AstKind::Decl(Box::new(var), Box::new(init)))
         }
         _ => panic!("Identifier expected, but got {}", tok.as_string()),
     }
@@ -568,7 +562,7 @@ pub fn read_decl_or_stmt() -> Option<Ast> {
             read_expr(0)
         };
         if let Some(tok) = lex::read_token() {
-            if !tok.is_punct(&';') {
+            if !tok.is_punct(';') {
                 panic!("Unterminated expression: {}", tok.as_string());
             }
         };
@@ -586,11 +580,12 @@ fn quote(q: &String) -> String {
         }
         buf.push(c);
     }
-    return buf;
+    buf
 }
 
 pub fn emit_data_section() {
-    let strings = CONTEXT.lock().unwrap().get_strings().clone();
+    let con = CONTEXT.lock().unwrap();
+    let strings = con.get_strings();
     if strings.is_empty() {
         return;
     }

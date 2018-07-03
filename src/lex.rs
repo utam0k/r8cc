@@ -24,9 +24,9 @@ impl Token {
         }
     }
 
-    pub fn is_punct(&self, c: &char) -> bool {
+    pub fn is_punct(&self, c: char) -> bool {
         match self {
-            Token::TtypePunct(punct) if punct == c => true,
+            Token::TtypePunct(punct) if punct == &c => true,
             _ => false,
         }
     }
@@ -179,7 +179,7 @@ pub fn read_token() -> Option<Token> {
 
 pub fn expect(punct: char) {
     let tok = read_token().unwrap();
-    if !tok.is_punct(&punct) {
+    if !tok.is_punct(punct) {
         panic!("'{}' expected, but got {}", punct, tok.as_string());
     }
 }
