@@ -111,7 +111,8 @@ pub enum Ctype {
     Void,
     Int(Option<i32>),
     Char(Option<char>),
-    Str(Option<Str>),
+    Array(Option<Str>),
+    // Array(Vec<Ctype>),
     Ptr(Box<Ctype>),
 }
 
@@ -122,7 +123,7 @@ impl Ctype {
             Void => "void".into(),
             Int(_) => "int".into(),
             Char(_) => "char".into(),
-            Str(_) => "string".into(),
+            Array(_) => "string".into(),
             Ptr(ctype) => format!("{}*", ctype.as_string()),
         }
     }
@@ -162,7 +163,7 @@ impl Ast {
         match kind {
             AstKind::Literal(ref ctype) => 
                 match ctype {
-                    Ctype::Str(str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone().unwrap()),
+                    Ctype::Array(str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone().unwrap()),
                     _ => ()
                 }
             AstKind::Var(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
@@ -184,7 +185,7 @@ impl Ast {
     }
 
     fn make_string(sval: String) -> Self {
-        Self::new(AstKind::Literal(Ctype::Str(Some(Str::new(sval)))))
+        Self::new(AstKind::Literal(Ctype::Array(Some(Str::new(sval)))))
     }
 
     pub fn to_string(&self) -> String {
@@ -200,7 +201,7 @@ impl Ast {
                 match ctype {
                     Int(Some(ival))=> print!("mov ${}, %rax\n\t", ival),
                     Char(Some(c))=> print!("mov ${}, %rax\n\t", c.to_owned() as i8),
-                    Str(Some(ast_str)) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
+                    Array(Some(ast_str)) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
                     _ => panic!("internal error"),
                 }
             }
@@ -302,7 +303,7 @@ impl Ast {
             Literal(ref ctype) => match ctype {
                 Ctype::Int(val) => buf.push_str(&format!("{}", val.unwrap())),
                 Ctype::Char(c) => buf.push_str(&format!("'{}'", c.unwrap())),
-                Ctype::Str(Some(ast_str)) => {
+                Ctype::Array(Some(ast_str)) => {
                     buf.push_str(&format!("\"{}\"", quote(&ast_str.sval)));
                 }
                 _ => panic!("literal expected"),
@@ -372,24 +373,33 @@ fn result_type_int(op: char, a_type: &Ctype, b_type: &Ctype) -> Ctype {
         types = (a_type, b_type);
     }
 
+   if matches!(b_type, Ctype::Ptr(_)) {
+       if op != '+' && op != '-' {
+           error(types, op);
+       }
+       if !matches!(a_type, Ctype::Ptr(_)) {
+           return b_type.clone();
+       }
+   }
+
     match types.0 {
         Void => error(types, op),
         Int(_) => {
             match types.1 {
                 Int(_) => return Int(None),
                 Char(_) => return Int(None),
-                Str(_) => error(types, op),
+                Array(_) => error(types, op),
                 _ => panic!("Internal Error"),
             }
         }
         Char(_) => {
             match types.1 {
                 Char(_) => return Int(None),
-                Str(_) => error(types, op),
+                Array(_) => error(types, op),
                 _ => panic!("Internal Error"),
             }
         }
-        Str(_) => error(types, op),
+        Array(_) => error(types, op),
         Ptr(a_ptr) => {
             match types.1 {
                 Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, a_ptr, b_ptr))),

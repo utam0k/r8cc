@@ -46,7 +46,7 @@ impl Token {
                 match sval.trim() {
                     "int" => Some(Ctype::Int(None)),
                     "char" => Some(Ctype::Char(None)),
-                    "string" => Some(Ctype::Str(None)),
+                    "string" => Some(Ctype::Array(None)),
                     _ => None,
                 }
             }
