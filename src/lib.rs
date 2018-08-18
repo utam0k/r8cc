@@ -1,13 +1,13 @@
-pub mod stream;
-pub mod lex;
 pub mod context;
+pub mod lex;
+pub mod stream;
 
 #[macro_use]
 extern crate lazy_static;
 
-use std::sync::Mutex;
-use std::marker::Send;
 use std::io::stdin;
+use std::marker::Send;
+use std::sync::Mutex;
 
 unsafe impl Send for context::Context {}
 unsafe impl Send for stream::Stream {}
@@ -111,20 +111,39 @@ pub enum Ctype {
     Void,
     Int(Option<i32>),
     Char(Option<char>),
-    Array(Option<Str>),
-    // Array(Vec<Ctype>),
+    Array(Option<(Vec<Ctype>, usize)>),
     Ptr(Box<Ctype>),
 }
 
 impl Ctype {
-    pub fn as_string(&self) -> String{
+    pub fn as_string(&self) -> String {
         use Ctype::*;
         match self {
             Void => "void".into(),
             Int(_) => "int".into(),
             Char(_) => "char".into(),
-            Array(_) => "string".into(),
+            Array(Some((ptrs, _))) => {
+                let mut s = String::new();
+                for p in ptrs {
+                    s = s + &p.as_string();
+                }
+                s + "[]"
+            }
             Ptr(ctype) => format!("{}*", ctype.as_string()),
+            _ => unreachable!(),
+        }
+    }
+
+    pub fn ctype_size(&self) -> usize {
+        1 << self.ctype_shift()
+    }
+
+    pub fn ctype_shift(&self) -> usize {
+        use Ctype::*;
+        match self {
+            Char(_) => 0,
+            Int(_) => 2,
+            _ => 3,
         }
     }
 }
@@ -161,11 +180,19 @@ pub struct Ast {
 impl Ast {
     fn new(kind: AstKind) -> Self {
         match kind {
-            AstKind::Literal(ref ctype) => 
-                match ctype {
-                    Ctype::Array(str_val) => CONTEXT.lock().unwrap().push_string(str_val.clone().unwrap()),
-                    _ => ()
+            AstKind::Literal(ref ctype) => match ctype {
+                Ctype::Array(Some((c_chars, _))) => {
+                    let mut s = String::new();
+                    for c_char in c_chars {
+                        match c_char {
+                            Ctype::Char(Some(c)) => s.push(c.clone()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    CONTEXT.lock().unwrap().push_string(s);
                 }
+                _ => (),
+            },
             AstKind::Var(ref var) => CONTEXT.lock().unwrap().push_var(var.clone()),
             _ => (),
         }
@@ -185,7 +212,12 @@ impl Ast {
     }
 
     fn make_string(sval: String) -> Self {
-        Self::new(AstKind::Literal(Ctype::Array(Some(Str::new(sval)))))
+        let sid = CONTEXT.lock().unwrap().get_strings_len();
+        let mut v = vec![];
+        for c in sval.chars() {
+            v.push(Ctype::Char(Some(c)));
+        }
+        Self::new(AstKind::Literal(Ctype::Array(Some((v, sid)))))
     }
 
     pub fn to_string(&self) -> String {
@@ -197,15 +229,21 @@ impl Ast {
         use self::Ctype::*;
 
         match self.kind {
-            Literal(ref ctype) => {
-                match ctype {
-                    Int(Some(ival))=> print!("mov ${}, %rax\n\t", ival),
-                    Char(Some(c))=> print!("mov ${}, %rax\n\t", c.to_owned() as i8),
-                    Array(Some(ast_str)) => print!("lea .s{}(%rip), %rax\n\t", ast_str.sid),
-                    _ => panic!("internal error"),
+            Literal(ref ctype) => match ctype {
+                Int(Some(ival)) => print!("mov ${}, %rax\n\t", ival),
+                Char(Some(c)) => print!("mov ${}, %rax\n\t", c.to_owned() as i8),
+                Array(Some((_, sid))) => print!("lea .s{}(%rip), %rax\n\t", sid),
+                _ => panic!("internal error"),
+            },
+            Var(ref var) => match var.ctype.ctype_size() {
+                1 => {
+                    print!("mov $0, %eax\n\t");
+                    print!("mov -{}(%rbp), %al\n\t", var.vpos * 8);
                 }
-            }
-            Var(ref var) => print!("mov -{}(%rbp), %rax\n\t", var.vpos * 8),
+                4 => print!("mov -{}(%rbp), %eax\n\t", var.vpos * 8),
+                8 => print!("mov -{}(%rbp), %rax\n\t", var.vpos * 8),
+                _ => panic!("internal error"),
+            },
             FuncCall(ref func_call) => {
                 let args_len = func_call.args.len();
 
@@ -219,26 +257,40 @@ impl Ast {
                 for i in (0..args_len).rev() {
                     print!("pop %{}\n\t", REGS[i]);
                 }
-                print!("mov $0, %rax\n\t");
+                print!("mov $0, %eax\n\t");
                 print!("call {}\n\t", func_call.fname);
                 for i in (1..args_len).rev() {
                     print!("pop %{}\n\t", REGS[i]);
                 }
             }
-           Decl(ref decl_var, ref decl_init) => decl_var.emit_assign(decl_init),
-           Addr(ref operand, _) => {
-               assert!(matches!(operand.kind, AstKind::Var(_)));
-               match operand.kind {
-                   AstKind::Var(ref var)=> print!("lea -{}(%rbp), %rax\n\t", var.vpos * 8),
-                   _ => (),
-               }
-           }
-           Deref(ref operand, _) => {
-               assert!(matches!(operand.get_ctype(), Some(Ctype::Ptr(_))));
-               operand.emit_expr();
-               print!("mov (%rax), %rax\n\t");
-           }
-           _ => self.emit_binop(),
+            Decl(ref decl_var, ref decl_init) => decl_var.emit_assign(decl_init),
+            Addr(ref operand, _) => {
+                assert!(matches!(operand.kind, AstKind::Var(_)));
+                match operand.kind {
+                    AstKind::Var(ref var) => print!("lea -{}(%rbp), %rax\n\t", var.vpos * 8),
+                    _ => (),
+                }
+            }
+            Deref(ref operand, ref p_ctype) => {
+                assert!(matches!(operand.get_ctype(), Some(Ctype::Ptr(_))));
+                let mut reg;
+                match p_ctype {
+                    Ctype::Ptr(ctype) => {
+                        reg = match ctype.ctype_size() {
+                            1 => "%bl",
+                            4 => "%ebx",
+                            8 => "%rbx",
+                            _ => panic!("internal error"),
+                        };
+                    }
+                    _ => unreachable!(),
+                }
+                operand.emit_expr();
+                print!("mov $0, %ebx\n\t");
+                print!("mov (%rax), {}\n\t", reg);
+                print!("mov %rbx, %rax\n\t");
+            }
+            _ => self.emit_binop(),
         }
     }
 
@@ -252,20 +304,29 @@ impl Ast {
 
     fn emit_binop(&self) {
         let op: &str;
-        op = match self.kind {
-            AstKind::Binop(kind, _, ref left, ref right) => {
-                match kind {
-                    '=' => {
-                        left.emit_assign(right);
+        if let Some(ctype) = self.get_ctype() {
+            if matches!(ctype, Ctype::Ptr(_)) {
+                match self.kind {
+                    AstKind::Binop(_, _, ref left, ref right) => {
+                        emit_pointer_arith(self, left, right);
                         return;
                     }
-                    '+' => "add",
-                    '-' => "sub",
-                    '*' => "imul",
-                    '/' => "",
-                    _ => panic!("invalid operand"),
+                    _ => unreachable!(),
                 }
             }
+        }
+        op = match self.kind {
+            AstKind::Binop(kind, _, ref left, ref right) => match kind {
+                '=' => {
+                    left.emit_assign(right);
+                    return;
+                }
+                '+' => "add",
+                '-' => "sub",
+                '*' => "imul",
+                '/' => "",
+                _ => panic!("invalid operand"),
+            },
             _ => panic!("invalid operand"),
         };
 
@@ -303,11 +364,18 @@ impl Ast {
             Literal(ref ctype) => match ctype {
                 Ctype::Int(val) => buf.push_str(&format!("{}", val.unwrap())),
                 Ctype::Char(c) => buf.push_str(&format!("'{}'", c.unwrap())),
-                Ctype::Array(Some(ast_str)) => {
-                    buf.push_str(&format!("\"{}\"", quote(&ast_str.sval)));
+                Ctype::Array(Some((ctype_chars, _))) => {
+                    let mut s = String::new();
+                    for ctype_char in ctype_chars {
+                        match ctype_char {
+                            Ctype::Char(Some(c)) => s.push(c.clone()),
+                            _ => unreachable!(),
+                        }
+                    }
+                    buf.push_str(&format!("\"{}\"", quote(&s)));
                 }
                 _ => panic!("literal expected"),
-            }
+            },
             Var(ref var) => buf.push_str(&var.name),
             FuncCall(ref func_call) => {
                 buf.push_str(&format!("{}(", func_call.fname));
@@ -340,7 +408,7 @@ impl Ast {
             }
             _ => panic!("No implement"),
         };
-        
+
         buf
     }
 
@@ -354,8 +422,7 @@ impl Ast {
     pub fn get_ctype(&self) -> Option<&Ctype> {
         use AstKind::*;
         match self.kind {
-            Binop(_, ref ctype, ..) |
-            Literal(ref ctype) => Some(ctype),
+            Binop(_, ref ctype, ..) | Literal(ref ctype) => Some(ctype),
             Var(ref var) => Some(&var.ctype),
             Addr(_, ref ctype) => Some(&ctype),
             Deref(_, ref ctype) => Some(&ctype),
@@ -373,39 +440,23 @@ fn result_type_int(op: char, a_type: &Ctype, b_type: &Ctype) -> Ctype {
         types = (a_type, b_type);
     }
 
-   if matches!(b_type, Ctype::Ptr(_)) {
-       if op != '+' && op != '-' {
-           error(types, op);
-       }
-       if !matches!(a_type, Ctype::Ptr(_)) {
-           return b_type.clone();
-       }
-   }
+    if matches!(b_type, Ctype::Ptr(_)) {
+        if op != '+' && op != '-' {
+            error(types, op);
+        }
+        if !matches!(a_type, Ctype::Ptr(_)) {
+            return b_type.clone();
+        }
+    }
 
     match types.0 {
         Void => error(types, op),
-        Int(_) => {
-            match types.1 {
-                Int(_) => return Int(None),
-                Char(_) => return Int(None),
-                Array(_) => error(types, op),
-                _ => panic!("Internal Error"),
-            }
-        }
-        Char(_) => {
-            match types.1 {
-                Char(_) => return Int(None),
-                Array(_) => error(types, op),
-                _ => panic!("Internal Error"),
-            }
-        }
-        Array(_) => error(types, op),
-        Ptr(a_ptr) => {
-            match types.1 {
-                Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, a_ptr, b_ptr))),
-                _ => panic!("Internal Error"),
-            }
-        }
+        Int(_) | Char(_) => return Int(None),
+        Array(_) => return result_type_int(op, &Ptr(Box::new(types.0.clone())), &types.1),
+        Ptr(a_ptr) => match types.1 {
+            Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, a_ptr, b_ptr))),
+            _ => panic!("Internal Error"),
+        },
     }
 
     return Int(None);
@@ -413,7 +464,6 @@ fn result_type_int(op: char, a_type: &Ctype, b_type: &Ctype) -> Ctype {
     fn error((a, b): (&Ctype, &Ctype), op: char) {
         panic!("incompatible operands: {:?} and {:?} for {}", a, b, op);
     }
-
 }
 
 fn result_type(op: char, a: &Ast, b: &Ast) -> Ctype {
@@ -423,7 +473,7 @@ fn result_type(op: char, a: &Ast, b: &Ast) -> Ctype {
 fn read_expr(prec: i8) -> Option<Ast> {
     let mut ast: Ast;
 
-    if let Some(ret_val) = read_unary_expr() {;
+    if let Some(ret_val) = read_unary_expr() {
         ast = ret_val;
     } else {
         return None; // Reach ';'.
@@ -464,7 +514,6 @@ fn read_expr(prec: i8) -> Option<Ast> {
                 return Some(ast);
             }
         }
-
     }
 }
 
@@ -514,7 +563,10 @@ fn read_unary_expr() -> Option<Ast> {
         let operand = read_unary_expr().unwrap();
         operand.ensure_lvalue();
         let ctype = operand.get_ctype().unwrap().clone();
-        return Some(Ast::new(AstKind::Addr(Box::new(operand),Ctype::Ptr(Box::new(ctype)))));
+        return Some(Ast::new(AstKind::Addr(
+            Box::new(operand),
+            Ctype::Ptr(Box::new(ctype)),
+        )));
     } else if tok.is_punct('*') {
         let operand = read_unary_expr().unwrap();
         let ctype = operand.get_ctype().cloned();
@@ -548,7 +600,7 @@ fn read_decl() -> Ast {
     loop {
         tok = lex::read_token().unwrap();
         if !tok.is_punct('*') {
-            break
+            break;
         }
         ctype = Ctype::Ptr(Box::new(ctype));
     }
@@ -600,13 +652,26 @@ pub fn emit_data_section() {
         return;
     }
     print!("\t.data\n");
-    for p in strings {
-        print!(".s{}:\n\t", p.sid);
-        print!(".string \"{}\"\n", quote(&p.sval));
+    for (p, sid) in strings {
+        print!(".s{}:\n\t", sid);
+        print!(".string \"{}\"\n", quote(&p));
     }
     print!("\t");
 }
 
+fn emit_pointer_arith(_op: &Ast, left: &Ast, right: &Ast) {
+    assert!(matches!(left.get_ctype(), Some(Ctype::Ptr(_))));
+    left.emit_expr();
+    print!("push %rax\n\t");
+    right.emit_expr();
+    let shift = left.get_ctype().unwrap().ctype_shift();
+    if shift > 0 {
+        print!("sal $%{}, %rax\n\t", shift);
+    }
+    print!("mov %rax, %rbx\n\t");
+    print!("pop %rax\n\t");
+    print!("add %rbx, %rax\n\t");
+}
 
 fn is_right_assoc(op: char) -> bool {
     op == '='

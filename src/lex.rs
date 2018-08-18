@@ -1,4 +1,4 @@
-use r8cc_io::{getc, ungetc, get_nonspace};
+use r8cc_io::{get_nonspace, getc, ungetc};
 use Ctype;
 
 // For undo
@@ -16,10 +16,8 @@ pub enum Token {
 impl Token {
     pub fn as_string(&self) -> String {
         match self {
-            Token::TtypeIdent(ref sval) |
-            Token::TtypeString(ref sval) => sval.clone(),
-            Token::TtypePunct(c) |
-            Token::TtypeChar(c) => c.to_string(),
+            Token::TtypeIdent(ref sval) | Token::TtypeString(ref sval) => sval.clone(),
+            Token::TtypePunct(c) | Token::TtypeChar(c) => c.to_string(),
             Token::TtypeInt(ival) => ival.to_string(),
         }
     }
@@ -42,14 +40,12 @@ impl Token {
 
     pub fn get_ctype(&self) -> Option<Ctype> {
         match self {
-            Token::TtypeIdent(sval) => {
-                match sval.trim() {
-                    "int" => Some(Ctype::Int(None)),
-                    "char" => Some(Ctype::Char(None)),
-                    "string" => Some(Ctype::Array(None)),
-                    _ => None,
-                }
-            }
+            Token::TtypeIdent(sval) => match sval.trim() {
+                "int" => Some(Ctype::Int(None)),
+                "char" => Some(Ctype::Char(None)),
+                "string" => Some(Ctype::Array(None)),
+                _ => None,
+            },
             _ => None,
         }
     }
@@ -146,9 +142,9 @@ fn read_token_int() -> Option<Token> {
             '"' => read_string(),
             '\'' => read_char(),
             'a'...'z' | 'A'...'Z' | '_' => read_ident(c.clone()),
-            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' | '&' => Token::TtypePunct(
-                c.clone(),
-            ),
+            '/' | '=' | '*' | '+' | '-' | '(' | ')' | ',' | ';' | '&' => {
+                Token::TtypePunct(c.clone())
+            }
             _ => panic!("Unexpected character: '{}'", c),
         };
         return Some(res);

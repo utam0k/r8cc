@@ -1,12 +1,12 @@
 use std::collections::LinkedList;
 
 use Var;
-use Str as AstStr;
 
 #[derive(Debug)]
 pub struct Context {
     pub vars: LinkedList<Var>,
-    pub strings: LinkedList<AstStr>,
+    pub strings: LinkedList<(String, usize)>,
+    pub sid: usize,
 }
 
 impl Context {
@@ -14,6 +14,7 @@ impl Context {
         Self {
             vars: LinkedList::new(),
             strings: LinkedList::new(),
+            sid: 0,
         }
     }
 
@@ -29,11 +30,12 @@ impl Context {
         self.vars.len()
     }
 
-    pub fn push_string(&mut self, s: AstStr) {
-        self.strings.push_front(s);
+    pub fn push_string(&mut self, s: String) {
+        self.strings.push_front((s, self.sid));
+        self.sid += 1;
     }
 
-    pub fn get_strings(&self) -> &LinkedList<AstStr> {
+    pub fn get_strings(&self) -> &LinkedList<(String, usize)> {
         &self.strings
     }
 
