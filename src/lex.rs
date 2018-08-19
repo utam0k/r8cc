@@ -16,8 +16,10 @@ pub enum Token {
 impl Token {
     pub fn as_string(&self) -> String {
         match self {
-            Token::TtypeIdent(ref sval) | Token::TtypeString(ref sval) => sval.clone(),
-            Token::TtypePunct(c) | Token::TtypeChar(c) => c.to_string(),
+            Token::TtypeIdent(ref sval) |
+            Token::TtypeString(ref sval) => sval.clone(),
+            Token::TtypePunct(c) |
+            Token::TtypeChar(c) => c.to_string(),
             Token::TtypeInt(ival) => ival.to_string(),
         }
     }
@@ -40,12 +42,15 @@ impl Token {
 
     pub fn get_ctype(&self) -> Option<Ctype> {
         match self {
-            Token::TtypeIdent(sval) => match sval.trim() {
-                "int" => Some(Ctype::Int(None)),
-                "char" => Some(Ctype::Char(None)),
-                "string" => Some(Ctype::Array(None)),
-                _ => None,
-            },
+            Token::TtypeIdent(sval) => {
+                match sval.trim() {
+                    // Temporary value.
+                    "int" => Some(Ctype::Int(0)),
+                    "char" => Some(Ctype::Char('a')),
+                    "string" => Some(Ctype::Array(vec![], 0)),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

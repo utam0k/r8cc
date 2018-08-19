@@ -92,26 +92,11 @@ impl FuncCall {
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct Str {
-    sval: String,
-    sid: usize,
-}
-
-impl Str {
-    pub fn new(sval: String) -> Self {
-        Self {
-            sval: sval,
-            sid: CONTEXT.lock().unwrap().get_strings_len() + 1,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Ctype {
     Void,
-    Int(Option<i32>),
-    Char(Option<char>),
-    Array(Option<(Vec<Ctype>, usize)>),
+    Int(i32),
+    Char(char),
+    Array(Vec<Ctype>, usize),
     Ptr(Box<Ctype>),
 }
 
@@ -122,7 +107,7 @@ impl Ctype {
             Void => "void".into(),
             Int(_) => "int".into(),
             Char(_) => "char".into(),
-            Array(Some((ptrs, _))) => {
+            Array(ptrs, _) => {
                 let mut s = String::new();
                 for p in ptrs {
                     s = s + &p.as_string();
@@ -130,7 +115,6 @@ impl Ctype {
                 s + "[]"
             }
             Ptr(ctype) => format!("{}*", ctype.as_string()),
-            _ => unreachable!(),
         }
     }
 
@@ -181,11 +165,11 @@ impl Ast {
     fn new(kind: AstKind) -> Self {
         match kind {
             AstKind::Literal(ref ctype) => match ctype {
-                Ctype::Array(Some((c_chars, _))) => {
+                Ctype::Array(c_chars, _) => {
                     let mut s = String::new();
                     for c_char in c_chars {
                         match c_char {
-                            Ctype::Char(Some(c)) => s.push(c.clone()),
+                            Ctype::Char(c) => s.push(c.clone()),
                             _ => unreachable!(),
                         }
                     }
@@ -204,20 +188,20 @@ impl Ast {
     }
 
     fn make_int(val: i32) -> Self {
-        Self::new(AstKind::Literal(Ctype::Int(Some(val))))
+        Self::new(AstKind::Literal(Ctype::Int(val)))
     }
 
     fn make_char(c: char) -> Self {
-        Self::new(AstKind::Literal(Ctype::Char(Some(c))))
+        Self::new(AstKind::Literal(Ctype::Char(c)))
     }
 
     fn make_string(sval: String) -> Self {
         let sid = CONTEXT.lock().unwrap().get_strings_len();
         let mut v = vec![];
         for c in sval.chars() {
-            v.push(Ctype::Char(Some(c)));
+            v.push(Ctype::Char(c));
         }
-        Self::new(AstKind::Literal(Ctype::Array(Some((v, sid)))))
+        Self::new(AstKind::Literal(Ctype::Array(v, sid)))
     }
 
     pub fn to_string(&self) -> String {
@@ -230,9 +214,9 @@ impl Ast {
 
         match self.kind {
             Literal(ref ctype) => match ctype {
-                Int(Some(ival)) => print!("mov ${}, %rax\n\t", ival),
-                Char(Some(c)) => print!("mov ${}, %rax\n\t", c.to_owned() as i8),
-                Array(Some((_, sid))) => print!("lea .s{}(%rip), %rax\n\t", sid),
+                Int(ival) => print!("mov ${}, %rax\n\t", ival),
+                Char(c) => print!("mov ${}, %rax\n\t", c.to_owned() as i8),
+                Array(_, sid) => print!("lea .s{}(%rip), %rax\n\t", sid),
                 _ => panic!("internal error"),
             },
             Var(ref var) => match var.ctype.ctype_size() {
@@ -362,13 +346,13 @@ impl Ast {
                 ));
             }
             Literal(ref ctype) => match ctype {
-                Ctype::Int(val) => buf.push_str(&format!("{}", val.unwrap())),
-                Ctype::Char(c) => buf.push_str(&format!("'{}'", c.unwrap())),
-                Ctype::Array(Some((ctype_chars, _))) => {
+                Ctype::Int(val)  => buf.push_str(&format!("{}", val)),
+                Ctype::Char(c) => buf.push_str(&format!("'{}'", c)),
+                Ctype::Array(ctype_chars, _) => {
                     let mut s = String::new();
                     for ctype_char in ctype_chars {
                         match ctype_char {
-                            Ctype::Char(Some(c)) => s.push(c.clone()),
+                            Ctype::Char(c) => s.push(c.clone()),
                             _ => unreachable!(),
                         }
                     }
@@ -451,15 +435,16 @@ fn result_type_int(op: char, a_type: &Ctype, b_type: &Ctype) -> Ctype {
 
     match types.0 {
         Void => error(types, op),
-        Int(_) | Char(_) => return Int(None),
-        Array(_) => return result_type_int(op, &Ptr(Box::new(types.0.clone())), &types.1),
+        Int(a) => return Int(a.clone()),
+        Char(a) => return Int(a.clone() as i32),
+        Array(_, _) => return result_type_int(op, &Ptr(Box::new(types.0.clone())), &types.1),
         Ptr(a_ptr) => match types.1 {
             Ptr(b_ptr) => return Ptr(Box::new(result_type_int(op, a_ptr, b_ptr))),
             _ => panic!("Internal Error"),
         },
     }
 
-    return Int(None);
+    unreachable!();
 
     fn error((a, b): (&Ctype, &Ctype), op: char) {
         panic!("incompatible operands: {:?} and {:?} for {}", a, b, op);
